@@ -9,7 +9,7 @@ outputs:
     value: '1.24.0'
   go_versions_matrix:
     description: "Go versions for matrix testing (JSON array)"
-    value: '["1.24.0", "1.25.5"]'
+    value: '["1.24.0", "1.25.6"]'
   golangci_lint_version:
     description: "golangci-lint version"
     value: 'v2.8.0'
