@@ -278,6 +278,16 @@ func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 		return
 	}
 
+	// Ensure we're dealing with the builtin len function, not a user-defined one.
+	obj := pass.TypesInfo.Uses[lenIdent]
+	if obj == nil {
+		return
+	}
+	builtin, ok := obj.(*types.Builtin)
+	if !ok || builtin.Name() != "len" {
+		return
+	}
+
 	// Check if len() has exactly one argument
 	if len(lenCall.Args) != 1 {
 		return
