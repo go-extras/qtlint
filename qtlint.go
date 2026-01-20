@@ -5,13 +5,16 @@
 //   - qt.Not(qt.IsNil) which should be replaced with qt.IsNotNil
 //   - qt.Not(qt.IsTrue) which should be replaced with qt.IsFalse
 //   - qt.Not(qt.IsFalse) which should be replaced with qt.IsTrue
+//   - len(x), qt.Equals which should be replaced with x, qt.HasLen
 //
 // This linter is designed to be used as a custom linter for golangci-lint.
 package qtlint
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
@@ -78,6 +81,9 @@ func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 
 	// Check if the checker is qt.Not(...)
 	checkNotPattern(pass, checkerArg)
+
+	// Check for len(x), qt.Equals pattern
+	checkLenEqualsPattern(pass, call)
 }
 
 // getCheckerArg extracts the checker argument from a quicktest assertion call.
@@ -233,4 +239,112 @@ func isQuicktestCMethod(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	}
 
 	return obj.Pkg().Path() == "github.com/frankban/quicktest" && obj.Name() == "C"
+}
+
+// checkLenEqualsPattern checks if the pattern is len(x), qt.Equals and suggests x, qt.HasLen.
+func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	// Determine the position of the "got" argument based on whether it's
+	// qt.Assert(t, got, checker, ...) or c.Assert(got, checker, ...)
+	var gotArgIndex int
+	if isPackageQualified(pass, sel) {
+		// qt.Assert(t, got, checker, ...) - got is at index 1
+		gotArgIndex = 1
+	} else {
+		// c.Assert(got, checker, ...) - got is at index 0
+		gotArgIndex = 0
+	}
+
+	// Make sure we have enough arguments
+	if len(call.Args) < gotArgIndex+2 {
+		return
+	}
+
+	gotArg := call.Args[gotArgIndex]
+	checkerArg := call.Args[gotArgIndex+1]
+
+	// Check if gotArg is a call to len()
+	lenCall, ok := gotArg.(*ast.CallExpr)
+	if !ok {
+		return
+	}
+
+	lenIdent, ok := lenCall.Fun.(*ast.Ident)
+	if !ok || lenIdent.Name != "len" {
+		return
+	}
+
+	// Ensure we're dealing with the builtin len function, not a user-defined one.
+	obj := pass.TypesInfo.Uses[lenIdent]
+	if obj == nil {
+		return
+	}
+	builtin, ok := obj.(*types.Builtin)
+	if !ok || builtin.Name() != "len" {
+		return
+	}
+
+	// Check if len() has exactly one argument
+	if len(lenCall.Args) != 1 {
+		return
+	}
+
+	// Check if the checker is qt.Equals
+	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	if checkerSel.Sel.Name != "Equals" {
+		return
+	}
+
+	if !isPackageQualified(pass, checkerSel) {
+		return
+	}
+
+	// Get the package identifier (e.g., "qt" in qt.Equals)
+	pkgIdent, ok := checkerSel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+
+	// Get the argument to len()
+	lenArg := lenCall.Args[0]
+
+	// Create the replacement text by formatting the AST node
+	var buf bytes.Buffer
+	if err := format.Node(&buf, pass.Fset, lenArg); err != nil {
+		return
+	}
+	newGotText := buf.String()
+	newCheckerText := pkgIdent.Name + ".HasLen"
+
+	diagnostic := analysis.Diagnostic{
+		Pos:     gotArg.Pos(),
+		End:     checkerArg.End(),
+		Message: "qtlint: use qt.HasLen instead of len(x), qt.Equals",
+		SuggestedFixes: []analysis.SuggestedFix{
+			{
+				Message: "Replace with qt.HasLen",
+				TextEdits: []analysis.TextEdit{
+					{
+						Pos:     gotArg.Pos(),
+						End:     gotArg.End(),
+						NewText: []byte(newGotText),
+					},
+					{
+						Pos:     checkerArg.Pos(),
+						End:     checkerArg.End(),
+						NewText: []byte(newCheckerText),
+					},
+				},
+			},
+		},
+	}
+	pass.Report(diagnostic)
 }

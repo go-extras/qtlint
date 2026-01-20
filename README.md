@@ -13,6 +13,7 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `qt.Not(qt.IsNil)` and suggesting `qt.IsNotNil`
 - Detecting `qt.Not(qt.IsTrue)` and suggesting `qt.IsFalse`
 - Detecting `qt.Not(qt.IsFalse)` and suggesting `qt.IsTrue`
+- Detecting `len(x), qt.Equals` and suggesting `x, qt.HasLen`
 
 This ensures that tests use the most direct and readable checker available.
 
@@ -136,6 +137,29 @@ c.Assert(value, qt.IsTrue)
 **Error message:**
 ```
 qtlint: use qt.IsTrue instead of qt.Not(qt.IsFalse)
+```
+
+### 4. Use `qt.HasLen` instead of `len(x), qt.Equals`
+
+The quicktest library provides `qt.HasLen` as a direct checker for checking the length of slices, arrays, maps, and strings, which is more readable than using `len(x), qt.Equals`.
+
+**Bad:**
+```go
+c.Assert(len(mySlice), qt.Equals, 3)
+qt.Assert(t, len(myMap), qt.Equals, 5)
+```
+
+**Good:**
+```go
+c.Assert(mySlice, qt.HasLen, 3)
+qt.Assert(t, myMap, qt.HasLen, 5)
+```
+
+**Auto-fix:** ✅ Automatically replaces `len(x), qt.Equals` with `x, qt.HasLen`
+
+**Error message:**
+```
+qtlint: use qt.HasLen instead of len(x), qt.Equals
 ```
 
 ## Examples

@@ -50,6 +50,7 @@ var (
 	IsFalse   Checker
 	Equals    Checker
 	DeepEquals Checker
+	HasLen    Checker
 )
 
 // Not returns a Checker negating the given Checker.
