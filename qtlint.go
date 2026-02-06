@@ -97,8 +97,8 @@ func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 		return
 	}
 
-	// Check for x == y, qt.IsTrue pattern
-	checkEqualityIsTruePattern(pass, call)
+	// Check for x == y / x != y with qt.IsTrue/qt.IsFalse patterns
+	checkEqualityComparisonPattern(pass, call)
 }
 
 // getCheckerArg extracts the checker argument from a quicktest assertion call.
@@ -487,9 +487,9 @@ func checkNilComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) bool {
 	return true
 }
 
-// checkEqualityIsTruePattern checks if the pattern is x ==/!= y, qt.IsTrue/qt.IsFalse
+// checkEqualityComparisonPattern checks if the pattern is x ==/!= y, qt.IsTrue/qt.IsFalse
 // and suggests the appropriate qt.Equals or qt.Not(qt.Equals) replacement.
-func checkEqualityIsTruePattern(pass *analysis.Pass, call *ast.CallExpr) {
+func checkEqualityComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return
