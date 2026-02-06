@@ -6,6 +6,12 @@
 //   - qt.Not(qt.IsTrue) which should be replaced with qt.IsFalse
 //   - qt.Not(qt.IsFalse) which should be replaced with qt.IsTrue
 //   - len(x), qt.Equals which should be replaced with x, qt.HasLen
+//   - x == y, qt.IsTrue which should be replaced with x, qt.Equals, y
+//   - x == y, qt.IsFalse which should be replaced with x, qt.Not(qt.Equals), y
+//   - x != y, qt.IsTrue which should be replaced with x, qt.Not(qt.Equals), y
+//   - x != y, qt.IsFalse which should be replaced with x, qt.Equals, y
+//   - x == nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNil/qt.IsNotNil
+//   - x != nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNotNil/qt.IsNil
 //
 // This linter is designed to be used as a custom linter for golangci-lint.
 package qtlint
@@ -15,6 +21,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/format"
+	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
@@ -84,6 +91,14 @@ func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 
 	// Check for len(x), qt.Equals pattern
 	checkLenEqualsPattern(pass, call)
+
+	// Check for x == nil / x != nil with qt.IsTrue/qt.IsFalse pattern
+	if checkNilComparisonPattern(pass, call) {
+		return
+	}
+
+	// Check for x == y, qt.IsTrue pattern
+	checkEqualityIsTruePattern(pass, call)
 }
 
 // getCheckerArg extracts the checker argument from a quicktest assertion call.
@@ -331,6 +346,246 @@ func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 		SuggestedFixes: []analysis.SuggestedFix{
 			{
 				Message: "Replace with qt.HasLen",
+				TextEdits: []analysis.TextEdit{
+					{
+						Pos:     gotArg.Pos(),
+						End:     gotArg.End(),
+						NewText: []byte(newGotText),
+					},
+					{
+						Pos:     checkerArg.Pos(),
+						End:     checkerArg.End(),
+						NewText: []byte(newCheckerText),
+					},
+				},
+			},
+		},
+	}
+	pass.Report(diagnostic)
+}
+
+// isNilIdent checks if an expression is the nil identifier.
+func isNilIdent(expr ast.Expr) bool {
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == "nil"
+}
+
+// checkNilComparisonPattern checks if the pattern is x == nil / x != nil with
+// qt.IsTrue or qt.IsFalse and suggests using qt.IsNil or qt.IsNotNil.
+// Returns true if the pattern was matched (to skip further checks).
+func checkNilComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	var gotArgIndex int
+	if isPackageQualified(pass, sel) {
+		gotArgIndex = 1
+	} else {
+		gotArgIndex = 0
+	}
+
+	if len(call.Args) < gotArgIndex+2 {
+		return false
+	}
+
+	gotArg := call.Args[gotArgIndex]
+	checkerArg := call.Args[gotArgIndex+1]
+
+	// Check if gotArg is a binary == or != expression
+	binExpr, ok := gotArg.(*ast.BinaryExpr)
+	if !ok {
+		return false
+	}
+	if binExpr.Op != token.EQL && binExpr.Op != token.NEQ {
+		return false
+	}
+
+	// Check if one side is nil
+	var nonNilExpr ast.Expr
+	switch {
+	case isNilIdent(binExpr.Y):
+		nonNilExpr = binExpr.X
+	case isNilIdent(binExpr.X):
+		nonNilExpr = binExpr.Y
+	default:
+		return false
+	}
+
+	// Check if the checker is qt.IsTrue or qt.IsFalse
+	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+
+	checkerName := checkerSel.Sel.Name
+	if checkerName != "IsTrue" && checkerName != "IsFalse" {
+		return false
+	}
+
+	if !isPackageQualified(pass, checkerSel) {
+		return false
+	}
+
+	pkgIdent, ok := checkerSel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+
+	// Determine the replacement checker:
+	// x == nil, qt.IsTrue  -> qt.IsNil
+	// x == nil, qt.IsFalse -> qt.IsNotNil
+	// x != nil, qt.IsTrue  -> qt.IsNotNil
+	// x != nil, qt.IsFalse -> qt.IsNil
+	isEq := binExpr.Op == token.EQL
+	isTrue := checkerName == "IsTrue"
+	var replacement string
+	if isEq == isTrue {
+		replacement = "IsNil"
+	} else {
+		replacement = "IsNotNil"
+	}
+
+	// Format the non-nil operand
+	var buf bytes.Buffer
+	if err := format.Node(&buf, pass.Fset, nonNilExpr); err != nil {
+		return false
+	}
+
+	opStr := "=="
+	if binExpr.Op == token.NEQ {
+		opStr = "!="
+	}
+
+	newGotText := buf.String()
+	newCheckerText := pkgIdent.Name + "." + replacement
+
+	diagnostic := analysis.Diagnostic{
+		Pos:     gotArg.Pos(),
+		End:     checkerArg.End(),
+		Message: fmt.Sprintf("qtlint: use qt.%s instead of x %s nil, qt.%s", replacement, opStr, checkerName),
+		SuggestedFixes: []analysis.SuggestedFix{
+			{
+				Message: fmt.Sprintf("Replace with qt.%s", replacement),
+				TextEdits: []analysis.TextEdit{
+					{
+						Pos:     gotArg.Pos(),
+						End:     gotArg.End(),
+						NewText: []byte(newGotText),
+					},
+					{
+						Pos:     checkerArg.Pos(),
+						End:     checkerArg.End(),
+						NewText: []byte(newCheckerText),
+					},
+				},
+			},
+		},
+	}
+	pass.Report(diagnostic)
+	return true
+}
+
+// checkEqualityIsTruePattern checks if the pattern is x ==/!= y, qt.IsTrue/qt.IsFalse
+// and suggests the appropriate qt.Equals or qt.Not(qt.Equals) replacement.
+func checkEqualityIsTruePattern(pass *analysis.Pass, call *ast.CallExpr) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	// Determine the position of the "got" argument based on whether it's
+	// qt.Assert(t, got, checker, ...) or c.Assert(got, checker, ...)
+	var gotArgIndex int
+	if isPackageQualified(pass, sel) {
+		gotArgIndex = 1
+	} else {
+		gotArgIndex = 0
+	}
+
+	// Make sure we have enough arguments
+	if len(call.Args) < gotArgIndex+2 {
+		return
+	}
+
+	gotArg := call.Args[gotArgIndex]
+	checkerArg := call.Args[gotArgIndex+1]
+
+	// Check if gotArg is a binary == or != expression
+	binExpr, ok := gotArg.(*ast.BinaryExpr)
+	if !ok {
+		return
+	}
+	if binExpr.Op != token.EQL && binExpr.Op != token.NEQ {
+		return
+	}
+
+	// Check if the checker is qt.IsTrue or qt.IsFalse
+	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	checkerName := checkerSel.Sel.Name
+	if checkerName != "IsTrue" && checkerName != "IsFalse" {
+		return
+	}
+
+	if !isPackageQualified(pass, checkerSel) {
+		return
+	}
+
+	// Get the package identifier (e.g., "qt" in qt.IsTrue)
+	pkgIdent, ok := checkerSel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+
+	// Format the left and right operands
+	var lhsBuf bytes.Buffer
+	if err := format.Node(&lhsBuf, pass.Fset, binExpr.X); err != nil {
+		return
+	}
+
+	var rhsBuf bytes.Buffer
+	if err := format.Node(&rhsBuf, pass.Fset, binExpr.Y); err != nil {
+		return
+	}
+
+	// Determine whether the result is Equals or Not(Equals):
+	// x == y, qt.IsTrue  -> qt.Equals
+	// x != y, qt.IsFalse -> qt.Equals
+	// x == y, qt.IsFalse -> qt.Not(qt.Equals)
+	// x != y, qt.IsTrue  -> qt.Not(qt.Equals)
+	isEq := binExpr.Op == token.EQL
+	isTrue := checkerName == "IsTrue"
+	useEquals := isEq == isTrue
+
+	opStr := "=="
+	if binExpr.Op == token.NEQ {
+		opStr = "!="
+	}
+
+	newGotText := lhsBuf.String()
+	var newCheckerText, message, fixMessage string
+	if useEquals {
+		newCheckerText = pkgIdent.Name + ".Equals, " + rhsBuf.String()
+		message = fmt.Sprintf("qtlint: use qt.Equals instead of x %s y, qt.%s", opStr, checkerName)
+		fixMessage = "Replace with qt.Equals"
+	} else {
+		newCheckerText = pkgIdent.Name + ".Not(" + pkgIdent.Name + ".Equals), " + rhsBuf.String()
+		message = fmt.Sprintf("qtlint: use qt.Not(qt.Equals) instead of x %s y, qt.%s", opStr, checkerName)
+		fixMessage = "Replace with qt.Not(qt.Equals)"
+	}
+
+	diagnostic := analysis.Diagnostic{
+		Pos:     gotArg.Pos(),
+		End:     checkerArg.End(),
+		Message: message,
+		SuggestedFixes: []analysis.SuggestedFix{
+			{
+				Message: fixMessage,
 				TextEdits: []analysis.TextEdit{
 					{
 						Pos:     gotArg.Pos(),

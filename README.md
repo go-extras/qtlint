@@ -14,6 +14,14 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `qt.Not(qt.IsTrue)` and suggesting `qt.IsFalse`
 - Detecting `qt.Not(qt.IsFalse)` and suggesting `qt.IsTrue`
 - Detecting `len(x), qt.Equals` and suggesting `x, qt.HasLen`
+- Detecting `x == y, qt.IsTrue` and suggesting `x, qt.Equals, y`
+- Detecting `x == y, qt.IsFalse` and suggesting `x, qt.Not(qt.Equals), y`
+- Detecting `x != y, qt.IsTrue` and suggesting `x, qt.Not(qt.Equals), y`
+- Detecting `x != y, qt.IsFalse` and suggesting `x, qt.Equals, y`
+- Detecting `x == nil, qt.IsTrue` and suggesting `x, qt.IsNil`
+- Detecting `x == nil, qt.IsFalse` and suggesting `x, qt.IsNotNil`
+- Detecting `x != nil, qt.IsTrue` and suggesting `x, qt.IsNotNil`
+- Detecting `x != nil, qt.IsFalse` and suggesting `x, qt.IsNil`
 
 This ensures that tests use the most direct and readable checker available.
 
@@ -160,6 +168,66 @@ qt.Assert(t, myMap, qt.HasLen, 5)
 **Error message:**
 ```
 qtlint: use qt.HasLen instead of len(x), qt.Equals
+```
+
+### 5. Use `qt.Equals` / `qt.Not(qt.Equals)` instead of equality comparisons with `qt.IsTrue` / `qt.IsFalse`
+
+Equality and inequality comparisons embedded in the "got" argument should use the appropriate checker directly.
+
+**Bad:**
+```go
+c.Assert(x == y, qt.IsTrue)
+c.Assert(x == y, qt.IsFalse)
+c.Assert(x != y, qt.IsTrue)
+c.Assert(x != y, qt.IsFalse)
+```
+
+**Good:**
+```go
+c.Assert(x, qt.Equals, y)
+c.Assert(x, qt.Not(qt.Equals), y)
+c.Assert(x, qt.Not(qt.Equals), y)
+c.Assert(x, qt.Equals, y)
+```
+
+**Auto-fix:** ✅ Automatically replaces with the appropriate `qt.Equals` or `qt.Not(qt.Equals)` checker
+
+**Error messages:**
+```
+qtlint: use qt.Equals instead of x == y, qt.IsTrue
+qtlint: use qt.Not(qt.Equals) instead of x == y, qt.IsFalse
+qtlint: use qt.Not(qt.Equals) instead of x != y, qt.IsTrue
+qtlint: use qt.Equals instead of x != y, qt.IsFalse
+```
+
+### 6. Use `qt.IsNil`/`qt.IsNotNil` instead of nil comparison with `qt.IsTrue`/`qt.IsFalse`
+
+Nil comparisons embedded in the "got" argument should use the dedicated `qt.IsNil` or `qt.IsNotNil` checkers.
+
+**Bad:**
+```go
+c.Assert(x == nil, qt.IsTrue)
+c.Assert(x == nil, qt.IsFalse)
+c.Assert(x != nil, qt.IsTrue)
+c.Assert(x != nil, qt.IsFalse)
+```
+
+**Good:**
+```go
+c.Assert(x, qt.IsNil)
+c.Assert(x, qt.IsNotNil)
+c.Assert(x, qt.IsNotNil)
+c.Assert(x, qt.IsNil)
+```
+
+**Auto-fix:** ✅ Automatically replaces with the appropriate `qt.IsNil` or `qt.IsNotNil` checker
+
+**Error messages:**
+```
+qtlint: use qt.IsNil instead of x == nil, qt.IsTrue
+qtlint: use qt.IsNotNil instead of x == nil, qt.IsFalse
+qtlint: use qt.IsNotNil instead of x != nil, qt.IsTrue
+qtlint: use qt.IsNil instead of x != nil, qt.IsFalse
 ```
 
 ## Examples
