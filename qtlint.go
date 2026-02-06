@@ -404,11 +404,12 @@ func checkNilComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) bool {
 
 	// Check if one side is nil
 	var nonNilExpr ast.Expr
-	if isNilIdent(binExpr.Y) {
+	switch {
+	case isNilIdent(binExpr.Y):
 		nonNilExpr = binExpr.X
-	} else if isNilIdent(binExpr.X) {
+	case isNilIdent(binExpr.X):
 		nonNilExpr = binExpr.Y
-	} else {
+	default:
 		return false
 	}
 
