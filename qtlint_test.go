@@ -30,4 +30,14 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "haslen")
 	})
+
+	t.Run("equality istrue patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "eqistrue")
+	})
+
+	t.Run("nil comparison patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "nilcmp")
+	})
 }

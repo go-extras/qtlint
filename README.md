@@ -14,6 +14,11 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `qt.Not(qt.IsTrue)` and suggesting `qt.IsFalse`
 - Detecting `qt.Not(qt.IsFalse)` and suggesting `qt.IsTrue`
 - Detecting `len(x), qt.Equals` and suggesting `x, qt.HasLen`
+- Detecting `x == y, qt.IsTrue` and suggesting `x, qt.Equals, y`
+- Detecting `x == nil, qt.IsTrue` and suggesting `x, qt.IsNil`
+- Detecting `x == nil, qt.IsFalse` and suggesting `x, qt.IsNotNil`
+- Detecting `x != nil, qt.IsTrue` and suggesting `x, qt.IsNotNil`
+- Detecting `x != nil, qt.IsFalse` and suggesting `x, qt.IsNil`
 
 This ensures that tests use the most direct and readable checker available.
 
@@ -160,6 +165,59 @@ qt.Assert(t, myMap, qt.HasLen, 5)
 **Error message:**
 ```
 qtlint: use qt.HasLen instead of len(x), qt.Equals
+```
+
+### 5. Use `qt.Equals` instead of `x == y, qt.IsTrue`
+
+Equality comparisons embedded in the "got" argument with `qt.IsTrue` should use `qt.Equals` directly for clarity.
+
+**Bad:**
+```go
+c.Assert(x == y, qt.IsTrue)
+qt.Assert(t, x == y, qt.IsTrue)
+```
+
+**Good:**
+```go
+c.Assert(x, qt.Equals, y)
+qt.Assert(t, x, qt.Equals, y)
+```
+
+**Auto-fix:** ✅ Automatically replaces `x == y, qt.IsTrue` with `x, qt.Equals, y`
+
+**Error message:**
+```
+qtlint: use qt.Equals instead of x == y, qt.IsTrue
+```
+
+### 6. Use `qt.IsNil`/`qt.IsNotNil` instead of nil comparison with `qt.IsTrue`/`qt.IsFalse`
+
+Nil comparisons embedded in the "got" argument should use the dedicated `qt.IsNil` or `qt.IsNotNil` checkers.
+
+**Bad:**
+```go
+c.Assert(x == nil, qt.IsTrue)
+c.Assert(x == nil, qt.IsFalse)
+c.Assert(x != nil, qt.IsTrue)
+c.Assert(x != nil, qt.IsFalse)
+```
+
+**Good:**
+```go
+c.Assert(x, qt.IsNil)
+c.Assert(x, qt.IsNotNil)
+c.Assert(x, qt.IsNotNil)
+c.Assert(x, qt.IsNil)
+```
+
+**Auto-fix:** ✅ Automatically replaces with the appropriate `qt.IsNil` or `qt.IsNotNil` checker
+
+**Error messages:**
+```
+qtlint: use qt.IsNil instead of x == nil, qt.IsTrue
+qtlint: use qt.IsNotNil instead of x == nil, qt.IsFalse
+qtlint: use qt.IsNotNil instead of x != nil, qt.IsTrue
+qtlint: use qt.IsNil instead of x != nil, qt.IsFalse
 ```
 
 ## Examples
