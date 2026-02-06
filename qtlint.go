@@ -7,6 +7,9 @@
 //   - qt.Not(qt.IsFalse) which should be replaced with qt.IsTrue
 //   - len(x), qt.Equals which should be replaced with x, qt.HasLen
 //   - x == y, qt.IsTrue which should be replaced with x, qt.Equals, y
+//   - x == y, qt.IsFalse which should be replaced with x, qt.Not(qt.Equals), y
+//   - x != y, qt.IsTrue which should be replaced with x, qt.Not(qt.Equals), y
+//   - x != y, qt.IsFalse which should be replaced with x, qt.Equals, y
 //   - x == nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNil/qt.IsNotNil
 //   - x != nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNotNil/qt.IsNil
 //
@@ -483,7 +486,8 @@ func checkNilComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) bool {
 	return true
 }
 
-// checkEqualityIsTruePattern checks if the pattern is x == y, qt.IsTrue and suggests x, qt.Equals, y.
+// checkEqualityIsTruePattern checks if the pattern is x ==/!= y, qt.IsTrue/qt.IsFalse
+// and suggests the appropriate qt.Equals or qt.Not(qt.Equals) replacement.
 func checkEqualityIsTruePattern(pass *analysis.Pass, call *ast.CallExpr) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -507,19 +511,23 @@ func checkEqualityIsTruePattern(pass *analysis.Pass, call *ast.CallExpr) {
 	gotArg := call.Args[gotArgIndex]
 	checkerArg := call.Args[gotArgIndex+1]
 
-	// Check if gotArg is a binary == expression
+	// Check if gotArg is a binary == or != expression
 	binExpr, ok := gotArg.(*ast.BinaryExpr)
-	if !ok || binExpr.Op != token.EQL {
+	if !ok {
+		return
+	}
+	if binExpr.Op != token.EQL && binExpr.Op != token.NEQ {
 		return
 	}
 
-	// Check if the checker is qt.IsTrue
+	// Check if the checker is qt.IsTrue or qt.IsFalse
 	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
 	if !ok {
 		return
 	}
 
-	if checkerSel.Sel.Name != "IsTrue" {
+	checkerName := checkerSel.Sel.Name
+	if checkerName != "IsTrue" && checkerName != "IsFalse" {
 		return
 	}
 
@@ -544,16 +552,39 @@ func checkEqualityIsTruePattern(pass *analysis.Pass, call *ast.CallExpr) {
 		return
 	}
 
+	// Determine whether the result is Equals or Not(Equals):
+	// x == y, qt.IsTrue  -> qt.Equals
+	// x != y, qt.IsFalse -> qt.Equals
+	// x == y, qt.IsFalse -> qt.Not(qt.Equals)
+	// x != y, qt.IsTrue  -> qt.Not(qt.Equals)
+	isEq := binExpr.Op == token.EQL
+	isTrue := checkerName == "IsTrue"
+	useEquals := isEq == isTrue
+
+	opStr := "=="
+	if binExpr.Op == token.NEQ {
+		opStr = "!="
+	}
+
 	newGotText := lhsBuf.String()
-	newCheckerText := pkgIdent.Name + ".Equals, " + rhsBuf.String()
+	var newCheckerText, message, fixMessage string
+	if useEquals {
+		newCheckerText = pkgIdent.Name + ".Equals, " + rhsBuf.String()
+		message = fmt.Sprintf("qtlint: use qt.Equals instead of x %s y, qt.%s", opStr, checkerName)
+		fixMessage = "Replace with qt.Equals"
+	} else {
+		newCheckerText = pkgIdent.Name + ".Not(" + pkgIdent.Name + ".Equals), " + rhsBuf.String()
+		message = fmt.Sprintf("qtlint: use qt.Not(qt.Equals) instead of x %s y, qt.%s", opStr, checkerName)
+		fixMessage = "Replace with qt.Not(qt.Equals)"
+	}
 
 	diagnostic := analysis.Diagnostic{
 		Pos:     gotArg.Pos(),
 		End:     checkerArg.End(),
-		Message: "qtlint: use qt.Equals instead of x == y, qt.IsTrue",
+		Message: message,
 		SuggestedFixes: []analysis.SuggestedFix{
 			{
-				Message: "Replace with qt.Equals",
+				Message: fixMessage,
 				TextEdits: []analysis.TextEdit{
 					{
 						Pos:     gotArg.Pos(),

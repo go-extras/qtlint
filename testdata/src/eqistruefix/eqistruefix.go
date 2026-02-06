@@ -18,4 +18,13 @@ func TestEqualityIsTrueFix(t *testing.T) {
 	b := "hello"
 	qt.Check(t, a == b, qt.IsTrue)     // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
 	c.Check(a == b, qt.IsTrue)         // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+
+	qt.Assert(t, x == y, qt.IsFalse)   // want `qtlint: use qt.Not\(qt.Equals\) instead of x == y, qt.IsFalse`
+	c.Assert(x == y, qt.IsFalse)       // want `qtlint: use qt.Not\(qt.Equals\) instead of x == y, qt.IsFalse`
+
+	qt.Assert(t, x != y, qt.IsTrue)    // want `qtlint: use qt.Not\(qt.Equals\) instead of x != y, qt.IsTrue`
+	c.Assert(x != y, qt.IsTrue)        // want `qtlint: use qt.Not\(qt.Equals\) instead of x != y, qt.IsTrue`
+
+	qt.Assert(t, x != y, qt.IsFalse)   // want "qtlint: use qt.Equals instead of x != y, qt.IsFalse"
+	c.Assert(x != y, qt.IsFalse)       // want "qtlint: use qt.Equals instead of x != y, qt.IsFalse"
 }
