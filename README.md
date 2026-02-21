@@ -86,7 +86,7 @@ golangci-lint run --fix
 
 ## Rules
 
-All rules support **automatic fixing** with the `-fix` flag.
+Most rules support **automatic fixing** with the `-fix` flag. The `if err != nil` rules (7 and 8) report diagnostics only — no automatic fix is provided.
 
 ### 1. Use `qt.IsNotNil` instead of `qt.Not(qt.IsNil)`
 
@@ -230,6 +230,62 @@ qtlint: use qt.IsNil instead of x == nil, qt.IsTrue
 qtlint: use qt.IsNotNil instead of x == nil, qt.IsFalse
 qtlint: use qt.IsNotNil instead of x != nil, qt.IsTrue
 qtlint: use qt.IsNil instead of x != nil, qt.IsFalse
+```
+
+### 7. Use `c.Assert(err, qt.IsNil)` instead of `if err != nil { t.Fatal[f](...) }`
+
+When a `*qt.C` variable and a quicktest import are in scope, the pattern `if err != nil { t.Fatal(...) }` should be replaced with a `c.Assert` call.
+
+**Bad:**
+```go
+if err != nil {
+    t.Fatal(err)
+}
+if err != nil {
+    t.Fatalf("unexpected error: %v", err)
+}
+```
+
+**Good:**
+```go
+c.Assert(err, qt.IsNil)
+c.Assert(err, qt.IsNil, qt.Commentf("unexpected error: %v", err))
+```
+
+**Auto-fix:** ❌ No automatic fix available
+
+**Error message:**
+```
+qtlint: use c.Assert(err, qt.IsNil) instead of t.Fatal(...)
+qtlint: use c.Assert(err, qt.IsNil, qt.Commentf(...)) instead of t.Fatalf(...)
+```
+
+### 8. Use `c.Check(err, qt.IsNil)` instead of `if err != nil { t.Error[f](...) }`
+
+Same as rule 7, but for `t.Error`/`t.Errorf` which maps to `c.Check` (non-fatal assertion).
+
+**Bad:**
+```go
+if err != nil {
+    t.Error(err)
+}
+if err != nil {
+    t.Errorf("unexpected error: %v", err)
+}
+```
+
+**Good:**
+```go
+c.Check(err, qt.IsNil)
+c.Check(err, qt.IsNil, qt.Commentf("unexpected error: %v", err))
+```
+
+**Auto-fix:** ❌ No automatic fix available
+
+**Error message:**
+```
+qtlint: use c.Check(err, qt.IsNil) instead of t.Error(...)
+qtlint: use c.Check(err, qt.IsNil, qt.Commentf(...)) instead of t.Errorf(...)
 ```
 
 ## Examples

@@ -25,8 +25,6 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
-	"strconv"
-	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -34,22 +32,17 @@ import (
 )
 
 // analyzer holds per-instance configuration flags.
-type analyzer struct {
-	fixErrNil bool
-}
+type analyzer struct{}
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
 func NewAnalyzer() *analysis.Analyzer {
 	a := &analyzer{}
-	an := &analysis.Analyzer{
+	return &analysis.Analyzer{
 		Name:     "qtlint",
 		Doc:      "enforces best practices for quicktest usage",
 		Run:      a.run,
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 	}
-	an.Flags.BoolVar(&a.fixErrNil, "fix-err-nil", false,
-		"enable auto-fix suggestions for if err != nil { t.Fatal/Error } patterns")
-	return an
 }
 
 // Analyzer is the qtlint analyzer that enforces best practices
@@ -715,62 +708,7 @@ func findQuicktestCVarName(pass *analysis.Pass, start ast.Node) string {
 	return ""
 }
 
-func fileForPos(pass *analysis.Pass, pos token.Pos) *ast.File {
-	for _, f := range pass.Files {
-		if f.Pos() <= pos && pos <= f.End() {
-			return f
-		}
-	}
-	return nil
-}
-
-func hasImport(file *ast.File, importPath string) bool {
-	for _, imp := range file.Imports {
-		path, err := strconv.Unquote(imp.Path.Value)
-		if err != nil {
-			continue
-		}
-		if path == importPath {
-			return true
-		}
-	}
-	return false
-}
-
-func addImportTextEdit(file *ast.File, importPath string) (analysis.TextEdit, bool) {
-	if file == nil {
-		return analysis.TextEdit{}, false
-	}
-
-	// Prefer adding to an existing parenthesized import block so gofmt can sort it
-	// and we don't create a second import declaration.
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.IMPORT {
-			continue
-		}
-		if genDecl.Lparen != token.NoPos && genDecl.Rparen != token.NoPos {
-			// Insert at the start of the import block so it ends up in the first group
-			// (usually stdlib), and gofmt can sort it.
-			if len(genDecl.Specs) == 0 {
-				break
-			}
-			insertPos := genDecl.Specs[0].Pos()
-			newText := []byte("\t" + strconv.Quote(importPath) + "\n")
-			return analysis.TextEdit{Pos: insertPos, End: insertPos, NewText: newText}, true
-		}
-	}
-
-	// Fallback: insert a new import decl after the package clause.
-	if file.Name == nil {
-		return analysis.TextEdit{}, false
-	}
-	insertPos := file.Name.End()
-	newText := []byte("\n\nimport " + strconv.Quote(importPath) + "\n")
-	return analysis.TextEdit{Pos: insertPos, End: insertPos, NewText: newText}, true
-}
-
-// errNilFatalMatch holds the parts of an "if err != nil { t.Fatal/Error(...) }"
+// errNilFatalMatch holds
 // pattern parsed by matchErrNilFatal.
 type errNilFatalMatch struct {
 	errExpr    ast.Expr
@@ -839,14 +777,14 @@ func isFromTestingPkg(s *types.Selection) bool {
 	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "testing"
 }
 
-func (a *analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
+func (*analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 	m, ok := matchErrNilFatal(pass, ifStmt)
 	if !ok {
 		return
 	}
 
 	// Verify the method belongs to the testing package so we don't accidentally
-	// rewrite calls to custom types that happen to have a Fatal/Error method.
+	// flag calls to custom types that happen to have a Fatal/Error method.
 	selection, selOk := pass.TypesInfo.Selections[m.sel]
 	if !selOk || !isFromTestingPkg(selection) {
 		return
@@ -870,152 +808,14 @@ func (a *analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfSt
 		return
 	}
 
-	args, ok := formatCallArgs(pass, m.call)
-	if !ok {
-		return
-	}
-
-	var commentText string
-	var needsFmtImport bool
-	if m.call.Ellipsis != token.NoPos {
-		var fmtAlias string
-		if f := fileForPos(pass, ifStmt.Pos()); f != nil {
-			fmtAlias = fmtPkgAlias(f)
-		}
-		commentText, needsFmtImport = buildSpreadCommentf(qtAlias, fmtAlias, m.methodName, args)
-	} else {
-		commentText = buildDirectCommentf(qtAlias, m.methodName, args)
-	}
-
-	assertStmtText := fmt.Sprintf("%s.%s(%s, %s.IsNil", cVar, m.qtMethod, errText, qtAlias)
 	shortAssertText := fmt.Sprintf("%s.%s(%s, %s.IsNil)", cVar, m.qtMethod, errText, qtAlias)
-	if commentText != "" {
-		assertStmtText += ", " + commentText
+	if len(m.call.Args) > 0 {
 		shortAssertText = fmt.Sprintf("%s.%s(%s, %s.IsNil, %s.Commentf(...))", cVar, m.qtMethod, errText, qtAlias, qtAlias)
 	}
-	assertStmtText += ")"
 
-	newStmtText := assertStmtText
-	if ifStmt.Init != nil {
-		initText, ok := formatNode(pass, ifStmt.Init)
-		if !ok {
-			return
-		}
-		// Keep the init variables scoped like they are in the if statement
-		// by using an explicit block.
-		newStmtText = "{\n" + initText + "\n" + assertStmtText + "\n}"
-	}
-
-	textEdits := []analysis.TextEdit{{
+	pass.Report(analysis.Diagnostic{
 		Pos:     ifStmt.Pos(),
 		End:     ifStmt.End(),
-		NewText: []byte(newStmtText),
-	}}
-	if needsFmtImport {
-		textEdits = appendFmtImportEdit(pass, ifStmt.Pos(), textEdits)
-	}
-
-	var fixes []analysis.SuggestedFix
-	if a.fixErrNil {
-		fixes = []analysis.SuggestedFix{{
-			Message:   fmt.Sprintf("Replace with %s", shortAssertText),
-			TextEdits: textEdits,
-		}}
-	}
-	pass.Report(analysis.Diagnostic{
-		Pos:            ifStmt.Pos(),
-		End:            ifStmt.End(),
-		Message:        fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
-		SuggestedFixes: fixes,
+		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
 	})
-}
-
-// formatCallArgs formats each argument of call as source text, appending "..."
-// to the last element when the call uses an ellipsis. Returns false if any
-// argument cannot be formatted.
-func formatCallArgs(pass *analysis.Pass, call *ast.CallExpr) ([]string, bool) {
-	args := make([]string, 0, len(call.Args))
-	for _, arg := range call.Args {
-		text, ok := formatExpr(pass, arg)
-		if !ok {
-			return nil, false
-		}
-		args = append(args, text)
-	}
-	if call.Ellipsis != token.NoPos && len(args) > 0 {
-		args[len(args)-1] += "..."
-	}
-	return args, true
-}
-
-// fmtPkgAlias returns the local identifier used to access the "fmt" package
-// in file, or an empty string if "fmt" is not imported or uses a blank/dot import.
-func fmtPkgAlias(file *ast.File) string {
-	for _, imp := range file.Imports {
-		path, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || path != "fmt" {
-			continue
-		}
-		if imp.Name == nil {
-			return "fmt"
-		}
-		if imp.Name.Name != "_" && imp.Name.Name != "." {
-			return imp.Name.Name
-		}
-		return ""
-	}
-	return ""
-}
-
-// buildSpreadCommentf returns the Commentf option text for a spread call
-// and reports that a "fmt" import needs to be added.
-// Pass an empty fmtAlias when fmt is not yet imported; "fmt" will be used as the identifier.
-func buildSpreadCommentf(qtAlias, fmtAlias, methodName string, args []string) (string, bool) {
-	if len(args) == 0 {
-		return "", false
-	}
-	needsFmt := fmtAlias == ""
-	if needsFmt {
-		fmtAlias = "fmt"
-	}
-	joined := strings.Join(args, ", ")
-	switch methodName {
-	case "Fatalf", "Errorf":
-		// Spread: pre-render the message so we don't repeat the format string
-		// with unknown arity directly in Commentf.
-		return fmt.Sprintf("%s.Commentf(%s.Sprintf(%s))", qtAlias, fmtAlias, joined), needsFmt
-	default: // Fatal, Error
-		// Collect all args into a single string via fmt.Sprint.
-		return fmt.Sprintf("%s.Commentf(%s.Sprint(%s))", qtAlias, fmtAlias, joined), needsFmt
-	}
-}
-
-// buildDirectCommentf returns the Commentf option text for a non-spread call.
-func buildDirectCommentf(qtAlias, methodName string, args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	joined := strings.Join(args, ", ")
-	switch methodName {
-	case "Fatalf", "Errorf":
-		// Pass through format+args unchanged.
-		return fmt.Sprintf("%s.Commentf(%s)", qtAlias, joined)
-	default: // Fatal, Error
-		// Generate a format string matching the number of args.
-		formatString := strings.TrimSpace(strings.Repeat("%v ", len(args)))
-		return fmt.Sprintf("%s.Commentf(%s, %s)", qtAlias, strconv.Quote(formatString), joined)
-	}
-}
-
-// appendFmtImportEdit appends a text edit that adds a "fmt" import to the file
-// containing pos, if that import is not already present.
-func appendFmtImportEdit(pass *analysis.Pass, pos token.Pos, edits []analysis.TextEdit) []analysis.TextEdit {
-	file := fileForPos(pass, pos)
-	if file == nil || hasImport(file, "fmt") {
-		return edits
-	}
-	if edit, ok := addImportTextEdit(file, "fmt"); ok {
-		edits = append(edits, edit)
-	}
-	return edits
 }
