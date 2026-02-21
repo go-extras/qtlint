@@ -630,6 +630,11 @@ func formatNode(pass *analysis.Pass, node ast.Node) (string, bool) {
 	return buf.String(), true
 }
 
+// formatExpr formats an AST expression node.
+//
+// It exists as a semantic wrapper around formatNode to clearly indicate
+// that only ast.Expr values are expected at the call sites, even though
+// it currently delegates directly to formatNode.
 func formatExpr(pass *analysis.Pass, expr ast.Expr) (string, bool) {
 	return formatNode(pass, expr)
 }
