@@ -33,14 +33,23 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
+// analyzer holds per-instance configuration flags.
+type analyzer struct {
+	fixErrNil bool
+}
+
 // NewAnalyzer creates a new instance of the qtlint analyzer.
 func NewAnalyzer() *analysis.Analyzer {
-	return &analysis.Analyzer{
+	a := &analyzer{}
+	an := &analysis.Analyzer{
 		Name:     "qtlint",
 		Doc:      "enforces best practices for quicktest usage",
-		Run:      run,
+		Run:      a.run,
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 	}
+	an.Flags.BoolVar(&a.fixErrNil, "fix-err-nil", false,
+		"enable auto-fix suggestions for if err != nil { t.Fatal/Error } patterns")
+	return an
 }
 
 // Analyzer is the qtlint analyzer that enforces best practices
@@ -54,7 +63,7 @@ var replacements = map[string]string{
 	"IsFalse": "IsTrue",
 }
 
-func run(pass *analysis.Pass) (any, error) {
+func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	result := pass.ResultOf[inspect.Analyzer]
 	insp, ok := result.(*inspector.Inspector)
 	if !ok {
@@ -72,7 +81,7 @@ func run(pass *analysis.Pass) (any, error) {
 		case *ast.CallExpr:
 			checkQuicktestCall(pass, n)
 		case *ast.IfStmt:
-			checkErrNilFatalPattern(pass, n)
+			a.checkErrNilFatalPattern(pass, n)
 		}
 	})
 
@@ -830,7 +839,7 @@ func isFromTestingPkg(s *types.Selection) bool {
 	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "testing"
 }
 
-func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
+func (a *analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 	m, ok := matchErrNilFatal(pass, ifStmt)
 	if !ok {
 		return
@@ -906,16 +915,19 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 		textEdits = appendFmtImportEdit(pass, ifStmt.Pos(), textEdits)
 	}
 
-	diagnostic := analysis.Diagnostic{
-		Pos:     ifStmt.Pos(),
-		End:     ifStmt.End(),
-		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
-		SuggestedFixes: []analysis.SuggestedFix{{
+	var fixes []analysis.SuggestedFix
+	if a.fixErrNil {
+		fixes = []analysis.SuggestedFix{{
 			Message:   fmt.Sprintf("Replace with %s", shortAssertText),
 			TextEdits: textEdits,
-		}},
+		}}
 	}
-	pass.Report(diagnostic)
+	pass.Report(analysis.Diagnostic{
+		Pos:            ifStmt.Pos(),
+		End:            ifStmt.End(),
+		Message:        fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
+		SuggestedFixes: fixes,
+	})
 }
 
 // formatCallArgs formats each argument of call as source text, appending "..."
