@@ -12,6 +12,8 @@
 //   - x != y, qt.IsFalse which should be replaced with x, qt.Equals, y
 //   - x == nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNil/qt.IsNotNil
 //   - x != nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNotNil/qt.IsNil
+//   - if err != nil { t.Fatal[f](...) } which should be replaced with c.Assert(err, qt.IsNil, qt.Commentf(...))
+//   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
 //
 // This linter is designed to be used as a custom linter for golangci-lint.
 package qtlint
@@ -23,6 +25,8 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
+	"strconv"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -57,17 +61,19 @@ func run(pass *analysis.Pass) (any, error) {
 		return nil, nil
 	}
 
-	// Filter for call expressions
+	// Filter for nodes we want to inspect.
 	nodeFilter := []ast.Node{
 		(*ast.CallExpr)(nil),
+		(*ast.IfStmt)(nil),
 	}
 
 	insp.Preorder(nodeFilter, func(n ast.Node) {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			checkQuicktestCall(pass, n)
+		case *ast.IfStmt:
+			checkErrNilFatalPattern(pass, n)
 		}
-		checkQuicktestCall(pass, call)
 	})
 
 	return nil, nil
@@ -598,6 +604,330 @@ func checkEqualityComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) {
 						NewText: []byte(newCheckerText),
 					},
 				},
+			},
+		},
+	}
+	pass.Report(diagnostic)
+}
+
+func stripParens(expr ast.Expr) ast.Expr {
+	for {
+		p, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = p.X
+	}
+}
+
+func formatNode(pass *analysis.Pass, node ast.Node) (string, bool) {
+	var buf bytes.Buffer
+	if err := format.Node(&buf, pass.Fset, node); err != nil {
+		return "", false
+	}
+	return buf.String(), true
+}
+
+func formatExpr(pass *analysis.Pass, expr ast.Expr) (string, bool) {
+	return formatNode(pass, expr)
+}
+
+func isErrorType(pass *analysis.Pass, expr ast.Expr) bool {
+	t := pass.TypesInfo.TypeOf(expr)
+	if t == nil {
+		return false
+	}
+
+	errTypeObj := types.Universe.Lookup("error")
+	if errTypeObj == nil {
+		return false
+	}
+	errType := errTypeObj.Type()
+
+	return types.AssignableTo(t, errType)
+}
+
+func findQuicktestPkgAlias(pass *analysis.Pass, start ast.Node) string {
+	scope := pass.TypesInfo.Scopes[start]
+	if scope == nil {
+		return ""
+	}
+	for ; scope != nil; scope = scope.Parent() {
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			pkgName, ok := obj.(*types.PkgName)
+			if !ok {
+				continue
+			}
+			if pkgName.Imported().Path() == "github.com/frankban/quicktest" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func isQuicktestCType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	return obj.Pkg().Path() == "github.com/frankban/quicktest" && obj.Name() == "C"
+}
+
+func findQuicktestCVarName(pass *analysis.Pass, start ast.Node) string {
+	scope := pass.TypesInfo.Scopes[start]
+	if scope == nil {
+		return ""
+	}
+	for ; scope != nil; scope = scope.Parent() {
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			v, ok := obj.(*types.Var)
+			if !ok {
+				continue
+			}
+			if isQuicktestCType(v.Type()) {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func fileForPos(pass *analysis.Pass, pos token.Pos) *ast.File {
+	for _, f := range pass.Files {
+		if f.Pos() <= pos && pos <= f.End() {
+			return f
+		}
+	}
+	return nil
+}
+
+func hasImport(file *ast.File, importPath string) bool {
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		if path == importPath {
+			return true
+		}
+	}
+	return false
+}
+
+func addImportTextEdit(file *ast.File, importPath string) (analysis.TextEdit, bool) {
+	if file == nil {
+		return analysis.TextEdit{}, false
+	}
+
+	// Prefer adding to an existing parenthesized import block so gofmt can sort it
+	// and we don't create a second import declaration.
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.IMPORT {
+			continue
+		}
+		if genDecl.Lparen != token.NoPos && genDecl.Rparen != token.NoPos {
+			// Insert at the start of the import block so it ends up in the first group
+			// (usually stdlib), and gofmt can sort it.
+			if len(genDecl.Specs) == 0 {
+				break
+			}
+			insertPos := genDecl.Specs[0].Pos()
+			newText := []byte("\t" + strconv.Quote(importPath) + "\n")
+			return analysis.TextEdit{Pos: insertPos, End: insertPos, NewText: newText}, true
+		}
+	}
+
+	// Fallback: insert a new import decl after the package clause.
+	if file.Name == nil {
+		return analysis.TextEdit{}, false
+	}
+	insertPos := file.Name.End()
+	newText := []byte("\n\nimport " + strconv.Quote(importPath) + "\n")
+	return analysis.TextEdit{Pos: insertPos, End: insertPos, NewText: newText}, true
+}
+
+func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
+	// We only auto-rewrite the simplest form because the fix is a statement replacement.
+	if ifStmt == nil || ifStmt.Else != nil {
+		return
+	}
+
+	cond := stripParens(ifStmt.Cond)
+	binExpr, ok := cond.(*ast.BinaryExpr)
+	if !ok || binExpr.Op != token.NEQ {
+		return
+	}
+
+	// Match: <expr> != nil (or nil != <expr>) where <expr> is assignable to error.
+	var errExpr ast.Expr
+	switch {
+	case isNilIdent(binExpr.Y):
+		errExpr = binExpr.X
+	case isNilIdent(binExpr.X):
+		errExpr = binExpr.Y
+	default:
+		return
+	}
+	if !isErrorType(pass, errExpr) {
+		return
+	}
+
+	if len(ifStmt.Body.List) != 1 {
+		return
+	}
+
+	exprStmt, ok := ifStmt.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return
+	}
+	call, ok := exprStmt.X.(*ast.CallExpr)
+	if !ok {
+		return
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	methodName := sel.Sel.Name
+	var qtMethod string
+	switch methodName {
+	case "Fatal", "Fatalf":
+		qtMethod = "Assert"
+	case "Error", "Errorf":
+		qtMethod = "Check"
+	default:
+		return
+	}
+
+	// Verify the method belongs to the testing package so we don't accidentally
+	// rewrite calls to custom types that happen to have a Fatal/Error method.
+	selection, ok := pass.TypesInfo.Selections[sel]
+	if !ok {
+		return
+	}
+	if selObj := selection.Obj(); selObj == nil || selObj.Pkg() == nil || selObj.Pkg().Path() != "testing" {
+		return
+	}
+
+	// The scope attached to the body is a good starting point for finding visible names.
+	startScopeNode := ast.Node(ifStmt.Body)
+	qtAlias := findQuicktestPkgAlias(pass, startScopeNode)
+	cVar := findQuicktestCVarName(pass, startScopeNode)
+	if qtAlias == "" || cVar == "" {
+		return
+	}
+
+	errText, ok := formatExpr(pass, errExpr)
+	if !ok {
+		return
+	}
+
+	receiverText, ok := formatExpr(pass, sel.X)
+	if !ok {
+		return
+	}
+
+	argsWithEllipsis := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		argText, ok := formatExpr(pass, arg)
+		if !ok {
+			return
+		}
+		argsWithEllipsis = append(argsWithEllipsis, argText)
+	}
+	if call.Ellipsis != token.NoPos && len(argsWithEllipsis) > 0 {
+		argsWithEllipsis[len(argsWithEllipsis)-1] += "..."
+	}
+
+	commentText := ""
+	needsFmtImport := false
+	if len(argsWithEllipsis) > 0 {
+		switch methodName {
+		case "Fatalf", "Errorf":
+			if call.Ellipsis != token.NoPos {
+				// Spread: pre-render the message so we don't repeat the format string with
+				// unknown arity directly in Commentf.
+				commentText = fmt.Sprintf("%s.Commentf(fmt.Sprintf(%s))", qtAlias, strings.Join(argsWithEllipsis, ", "))
+				needsFmtImport = true
+			} else {
+				// No spread: pass through format+args unchanged.
+				commentText = fmt.Sprintf("%s.Commentf(%s)", qtAlias, strings.Join(argsWithEllipsis, ", "))
+			}
+		case "Fatal", "Error":
+			if call.Ellipsis != token.NoPos {
+				// args...: collect all args into a single string via fmt.Sprint.
+				commentText = fmt.Sprintf("%s.Commentf(fmt.Sprint(%s))", qtAlias, strings.Join(argsWithEllipsis, ", "))
+				needsFmtImport = true
+			} else {
+				// Generate a format string matching the number of args.
+				formatString := strings.TrimSpace(strings.Repeat("%v ", len(argsWithEllipsis)))
+				commentText = fmt.Sprintf("%s.Commentf(%s, %s)", qtAlias, strconv.Quote(formatString), strings.Join(argsWithEllipsis, ", "))
+			}
+		}
+	}
+
+	assertStmtText := fmt.Sprintf("%s.%s(%s, %s.IsNil", cVar, qtMethod, errText, qtAlias)
+	shortAssertText := fmt.Sprintf("%s.%s(%s, %s.IsNil)", cVar, qtMethod, errText, qtAlias)
+	if commentText != "" {
+		assertStmtText += ", " + commentText
+		shortAssertText = fmt.Sprintf("%s.%s(%s, %s.IsNil, %s.Commentf(...))", cVar, qtMethod, errText, qtAlias, qtAlias)
+	}
+	assertStmtText += ")"
+
+	newStmtText := assertStmtText
+	if ifStmt.Init != nil {
+		initText, ok := formatNode(pass, ifStmt.Init)
+		if !ok {
+			return
+		}
+
+		// Keep the init variables scoped like they are in the if statement by using
+		// an explicit block.
+		newStmtText = "{\n" + initText + "\n" + assertStmtText + "\n}"
+	}
+
+	textEdits := []analysis.TextEdit{
+		{
+			Pos:     ifStmt.Pos(),
+			End:     ifStmt.End(),
+			NewText: []byte(newStmtText),
+		},
+	}
+
+	if needsFmtImport {
+		file := fileForPos(pass, ifStmt.Pos())
+		if file != nil && !hasImport(file, "fmt") {
+			importEdit, ok := addImportTextEdit(file, "fmt")
+			if ok {
+				textEdits = append(textEdits, importEdit)
+			}
+		}
+	}
+
+	diagnostic := analysis.Diagnostic{
+		Pos:     ifStmt.Pos(),
+		End:     ifStmt.End(),
+		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, methodName),
+		SuggestedFixes: []analysis.SuggestedFix{
+			{
+				Message:   fmt.Sprintf("Replace with %s", shortAssertText),
+				TextEdits: textEdits,
 			},
 		},
 	}

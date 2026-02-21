@@ -22,6 +22,8 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `x == nil, qt.IsFalse` and suggesting `x, qt.IsNotNil`
 - Detecting `x != nil, qt.IsTrue` and suggesting `x, qt.IsNotNil`
 - Detecting `x != nil, qt.IsFalse` and suggesting `x, qt.IsNil`
+- Detecting `if err != nil { t.Fatal[f](...) }` and suggesting `c.Assert(err, qt.IsNil, qt.Commentf(...))`
+- Detecting `if err != nil { t.Error[f](...) }` and suggesting `c.Check(err, qt.IsNil, qt.Commentf(...))`
 
 This ensures that tests use the most direct and readable checker available.
 
