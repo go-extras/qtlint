@@ -761,16 +761,26 @@ func addImportTextEdit(file *ast.File, importPath string) (analysis.TextEdit, bo
 	return analysis.TextEdit{Pos: insertPos, End: insertPos, NewText: newText}, true
 }
 
-func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
-	// We only auto-rewrite the simplest form because the fix is a statement replacement.
+// errNilFatalMatch holds the parts of an "if err != nil { t.Fatal/Error(...) }"
+// pattern parsed by matchErrNilFatal.
+type errNilFatalMatch struct {
+	errExpr    ast.Expr
+	call       *ast.CallExpr
+	sel        *ast.SelectorExpr
+	methodName string // "Fatal", "Fatalf", "Error", or "Errorf"
+	qtMethod   string // "Assert" or "Check"
+}
+
+// matchErrNilFatal validates and parses ifStmt into an errNilFatalMatch.
+func matchErrNilFatal(pass *analysis.Pass, ifStmt *ast.IfStmt) (errNilFatalMatch, bool) {
 	if ifStmt == nil || ifStmt.Else != nil {
-		return
+		return errNilFatalMatch{}, false
 	}
 
 	cond := stripParens(ifStmt.Cond)
 	binExpr, ok := cond.(*ast.BinaryExpr)
 	if !ok || binExpr.Op != token.NEQ {
-		return
+		return errNilFatalMatch{}, false
 	}
 
 	// Match: <expr> != nil (or nil != <expr>) where <expr> is assignable to error.
@@ -781,47 +791,55 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 	case isNilIdent(binExpr.X):
 		errExpr = binExpr.Y
 	default:
-		return
+		return errNilFatalMatch{}, false
 	}
 	if !isErrorType(pass, errExpr) {
-		return
+		return errNilFatalMatch{}, false
 	}
 
 	if len(ifStmt.Body.List) != 1 {
-		return
+		return errNilFatalMatch{}, false
 	}
 
 	exprStmt, ok := ifStmt.Body.List[0].(*ast.ExprStmt)
 	if !ok {
-		return
+		return errNilFatalMatch{}, false
 	}
 	call, ok := exprStmt.X.(*ast.CallExpr)
 	if !ok {
-		return
+		return errNilFatalMatch{}, false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return
+		return errNilFatalMatch{}, false
 	}
 
-	methodName := sel.Sel.Name
-	var qtMethod string
-	switch methodName {
+	switch sel.Sel.Name {
 	case "Fatal", "Fatalf":
-		qtMethod = "Assert"
+		return errNilFatalMatch{errExpr, call, sel, sel.Sel.Name, "Assert"}, true
 	case "Error", "Errorf":
-		qtMethod = "Check"
+		return errNilFatalMatch{errExpr, call, sel, sel.Sel.Name, "Check"}, true
 	default:
+		return errNilFatalMatch{}, false
+	}
+}
+
+// isFromTestingPkg reports whether the method in s is defined in the testing package.
+func isFromTestingPkg(s *types.Selection) bool {
+	obj := s.Obj()
+	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "testing"
+}
+
+func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
+	m, ok := matchErrNilFatal(pass, ifStmt)
+	if !ok {
 		return
 	}
 
 	// Verify the method belongs to the testing package so we don't accidentally
 	// rewrite calls to custom types that happen to have a Fatal/Error method.
-	selection, ok := pass.TypesInfo.Selections[sel]
-	if !ok {
-		return
-	}
-	if selObj := selection.Obj(); selObj == nil || selObj.Pkg() == nil || selObj.Pkg().Path() != "testing" {
+	selection, selOk := pass.TypesInfo.Selections[m.sel]
+	if !selOk || !isFromTestingPkg(selection) {
 		return
 	}
 
@@ -833,28 +851,34 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 		return
 	}
 
-	errText, ok := formatExpr(pass, errExpr)
+	errText, ok := formatExpr(pass, m.errExpr)
 	if !ok {
 		return
 	}
 
-	receiverText, ok := formatExpr(pass, sel.X)
+	receiverText, ok := formatExpr(pass, m.sel.X)
 	if !ok {
 		return
 	}
 
-	args, ok := formatCallArgs(pass, call)
+	args, ok := formatCallArgs(pass, m.call)
 	if !ok {
 		return
 	}
 
-	commentText, needsFmtImport := buildCommentf(qtAlias, methodName, args, call.Ellipsis != token.NoPos)
+	var commentText string
+	var needsFmtImport bool
+	if m.call.Ellipsis != token.NoPos {
+		commentText, needsFmtImport = buildSpreadCommentf(qtAlias, m.methodName, args)
+	} else {
+		commentText = buildDirectCommentf(qtAlias, m.methodName, args)
+	}
 
-	assertStmtText := fmt.Sprintf("%s.%s(%s, %s.IsNil", cVar, qtMethod, errText, qtAlias)
-	shortAssertText := fmt.Sprintf("%s.%s(%s, %s.IsNil)", cVar, qtMethod, errText, qtAlias)
+	assertStmtText := fmt.Sprintf("%s.%s(%s, %s.IsNil", cVar, m.qtMethod, errText, qtAlias)
+	shortAssertText := fmt.Sprintf("%s.%s(%s, %s.IsNil)", cVar, m.qtMethod, errText, qtAlias)
 	if commentText != "" {
 		assertStmtText += ", " + commentText
-		shortAssertText = fmt.Sprintf("%s.%s(%s, %s.IsNil, %s.Commentf(...))", cVar, qtMethod, errText, qtAlias, qtAlias)
+		shortAssertText = fmt.Sprintf("%s.%s(%s, %s.IsNil, %s.Commentf(...))", cVar, m.qtMethod, errText, qtAlias, qtAlias)
 	}
 	assertStmtText += ")"
 
@@ -864,8 +888,8 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 		if !ok {
 			return
 		}
-		// Keep the init variables scoped like they are in the if statement by using
-		// an explicit block.
+		// Keep the init variables scoped like they are in the if statement
+		// by using an explicit block.
 		newStmtText = "{\n" + initText + "\n" + assertStmtText + "\n}"
 	}
 
@@ -881,7 +905,7 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 	diagnostic := analysis.Diagnostic{
 		Pos:     ifStmt.Pos(),
 		End:     ifStmt.End(),
-		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, methodName),
+		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
 		SuggestedFixes: []analysis.SuggestedFix{{
 			Message:   fmt.Sprintf("Replace with %s", shortAssertText),
 			TextEdits: textEdits,
@@ -908,33 +932,40 @@ func formatCallArgs(pass *analysis.Pass, call *ast.CallExpr) ([]string, bool) {
 	return args, true
 }
 
-// buildCommentf returns the qt.Commentf(...) expression text and whether a
-// "fmt" import needs to be added. args must already have "..." appended to the
-// last element when isSpread is true.
-func buildCommentf(qtAlias, methodName string, args []string, isSpread bool) (commentText string, needsFmt bool) {
+// buildSpreadCommentf returns the qt.Commentf(...) text for a spread call
+// (t.Fatalf(fmt, args...) or t.Fatal(args...)), and reports that a "fmt" import is needed.
+func buildSpreadCommentf(qtAlias, methodName string, args []string) (string, bool) {
 	if len(args) == 0 {
 		return "", false
 	}
 	joined := strings.Join(args, ", ")
 	switch methodName {
 	case "Fatalf", "Errorf":
-		if isSpread {
-			// Spread: pre-render the message so we don't repeat the format string
-			// with unknown arity directly in Commentf.
-			return fmt.Sprintf("%s.Commentf(fmt.Sprintf(%s))", qtAlias, joined), true
-		}
-		// No spread: pass through format+args unchanged.
-		return fmt.Sprintf("%s.Commentf(%s)", qtAlias, joined), false
-	case "Fatal", "Error":
-		if isSpread {
-			// args...: collect all args into a single string via fmt.Sprint.
-			return fmt.Sprintf("%s.Commentf(fmt.Sprint(%s))", qtAlias, joined), true
-		}
+		// Spread: pre-render the message so we don't repeat the format string
+		// with unknown arity directly in Commentf.
+		return fmt.Sprintf("%s.Commentf(fmt.Sprintf(%s))", qtAlias, joined), true
+	default: // Fatal, Error
+		// Collect all args into a single string via fmt.Sprint.
+		return fmt.Sprintf("%s.Commentf(fmt.Sprint(%s))", qtAlias, joined), true
+	}
+}
+
+// buildDirectCommentf returns the qt.Commentf(...) text for a non-spread call
+// (t.Fatalf(fmt, a, b) or t.Fatal(a, b, c)).
+func buildDirectCommentf(qtAlias, methodName string, args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	joined := strings.Join(args, ", ")
+	switch methodName {
+	case "Fatalf", "Errorf":
+		// Pass through format+args unchanged.
+		return fmt.Sprintf("%s.Commentf(%s)", qtAlias, joined)
+	default: // Fatal, Error
 		// Generate a format string matching the number of args.
 		formatString := strings.TrimSpace(strings.Repeat("%v ", len(args)))
-		return fmt.Sprintf("%s.Commentf(%s, %s)", qtAlias, strconv.Quote(formatString), joined), false
+		return fmt.Sprintf("%s.Commentf(%s, %s)", qtAlias, strconv.Quote(formatString), joined)
 	}
-	return "", false
 }
 
 // appendFmtImportEdit appends a text edit that adds a "fmt" import to the file
