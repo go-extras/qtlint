@@ -843,44 +843,12 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 		return
 	}
 
-	argsWithEllipsis := make([]string, 0, len(call.Args))
-	for _, arg := range call.Args {
-		argText, ok := formatExpr(pass, arg)
-		if !ok {
-			return
-		}
-		argsWithEllipsis = append(argsWithEllipsis, argText)
-	}
-	if call.Ellipsis != token.NoPos && len(argsWithEllipsis) > 0 {
-		argsWithEllipsis[len(argsWithEllipsis)-1] += "..."
+	args, ok := formatCallArgs(pass, call)
+	if !ok {
+		return
 	}
 
-	commentText := ""
-	needsFmtImport := false
-	if len(argsWithEllipsis) > 0 {
-		switch methodName {
-		case "Fatalf", "Errorf":
-			if call.Ellipsis != token.NoPos {
-				// Spread: pre-render the message so we don't repeat the format string with
-				// unknown arity directly in Commentf.
-				commentText = fmt.Sprintf("%s.Commentf(fmt.Sprintf(%s))", qtAlias, strings.Join(argsWithEllipsis, ", "))
-				needsFmtImport = true
-			} else {
-				// No spread: pass through format+args unchanged.
-				commentText = fmt.Sprintf("%s.Commentf(%s)", qtAlias, strings.Join(argsWithEllipsis, ", "))
-			}
-		case "Fatal", "Error":
-			if call.Ellipsis != token.NoPos {
-				// args...: collect all args into a single string via fmt.Sprint.
-				commentText = fmt.Sprintf("%s.Commentf(fmt.Sprint(%s))", qtAlias, strings.Join(argsWithEllipsis, ", "))
-				needsFmtImport = true
-			} else {
-				// Generate a format string matching the number of args.
-				formatString := strings.TrimSpace(strings.Repeat("%v ", len(argsWithEllipsis)))
-				commentText = fmt.Sprintf("%s.Commentf(%s, %s)", qtAlias, strconv.Quote(formatString), strings.Join(argsWithEllipsis, ", "))
-			}
-		}
-	}
+	commentText, needsFmtImport := buildCommentf(qtAlias, methodName, args, call.Ellipsis != token.NoPos)
 
 	assertStmtText := fmt.Sprintf("%s.%s(%s, %s.IsNil", cVar, qtMethod, errText, qtAlias)
 	shortAssertText := fmt.Sprintf("%s.%s(%s, %s.IsNil)", cVar, qtMethod, errText, qtAlias)
@@ -896,40 +864,88 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 		if !ok {
 			return
 		}
-
 		// Keep the init variables scoped like they are in the if statement by using
 		// an explicit block.
 		newStmtText = "{\n" + initText + "\n" + assertStmtText + "\n}"
 	}
 
-	textEdits := []analysis.TextEdit{
-		{
-			Pos:     ifStmt.Pos(),
-			End:     ifStmt.End(),
-			NewText: []byte(newStmtText),
-		},
-	}
-
+	textEdits := []analysis.TextEdit{{
+		Pos:     ifStmt.Pos(),
+		End:     ifStmt.End(),
+		NewText: []byte(newStmtText),
+	}}
 	if needsFmtImport {
-		file := fileForPos(pass, ifStmt.Pos())
-		if file != nil && !hasImport(file, "fmt") {
-			importEdit, ok := addImportTextEdit(file, "fmt")
-			if ok {
-				textEdits = append(textEdits, importEdit)
-			}
-		}
+		textEdits = appendFmtImportEdit(pass, ifStmt.Pos(), textEdits)
 	}
 
 	diagnostic := analysis.Diagnostic{
 		Pos:     ifStmt.Pos(),
 		End:     ifStmt.End(),
 		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, methodName),
-		SuggestedFixes: []analysis.SuggestedFix{
-			{
-				Message:   fmt.Sprintf("Replace with %s", shortAssertText),
-				TextEdits: textEdits,
-			},
-		},
+		SuggestedFixes: []analysis.SuggestedFix{{
+			Message:   fmt.Sprintf("Replace with %s", shortAssertText),
+			TextEdits: textEdits,
+		}},
 	}
 	pass.Report(diagnostic)
+}
+
+// formatCallArgs formats each argument of call as source text, appending "..."
+// to the last element when the call uses an ellipsis. Returns false if any
+// argument cannot be formatted.
+func formatCallArgs(pass *analysis.Pass, call *ast.CallExpr) ([]string, bool) {
+	args := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		text, ok := formatExpr(pass, arg)
+		if !ok {
+			return nil, false
+		}
+		args = append(args, text)
+	}
+	if call.Ellipsis != token.NoPos && len(args) > 0 {
+		args[len(args)-1] += "..."
+	}
+	return args, true
+}
+
+// buildCommentf returns the qt.Commentf(...) expression text and whether a
+// "fmt" import needs to be added. args must already have "..." appended to the
+// last element when isSpread is true.
+func buildCommentf(qtAlias, methodName string, args []string, isSpread bool) (commentText string, needsFmt bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	joined := strings.Join(args, ", ")
+	switch methodName {
+	case "Fatalf", "Errorf":
+		if isSpread {
+			// Spread: pre-render the message so we don't repeat the format string
+			// with unknown arity directly in Commentf.
+			return fmt.Sprintf("%s.Commentf(fmt.Sprintf(%s))", qtAlias, joined), true
+		}
+		// No spread: pass through format+args unchanged.
+		return fmt.Sprintf("%s.Commentf(%s)", qtAlias, joined), false
+	case "Fatal", "Error":
+		if isSpread {
+			// args...: collect all args into a single string via fmt.Sprint.
+			return fmt.Sprintf("%s.Commentf(fmt.Sprint(%s))", qtAlias, joined), true
+		}
+		// Generate a format string matching the number of args.
+		formatString := strings.TrimSpace(strings.Repeat("%v ", len(args)))
+		return fmt.Sprintf("%s.Commentf(%s, %s)", qtAlias, strconv.Quote(formatString), joined), false
+	}
+	return "", false
+}
+
+// appendFmtImportEdit appends a text edit that adds a "fmt" import to the file
+// containing pos, if that import is not already present.
+func appendFmtImportEdit(pass *analysis.Pass, pos token.Pos, edits []analysis.TextEdit) []analysis.TextEdit {
+	file := fileForPos(pass, pos)
+	if file == nil || hasImport(file, "fmt") {
+		return edits
+	}
+	if edit, ok := addImportTextEdit(file, "fmt"); ok {
+		edits = append(edits, edit)
+	}
+	return edits
 }
