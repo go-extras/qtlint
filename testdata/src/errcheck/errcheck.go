@@ -132,3 +132,44 @@ func TestNoFlagCustomLogger(t *testing.T) {
 
 	c.Assert(1, qt.Equals, 1)
 }
+
+func TestNoFlagEqualNil(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	if err == nil { // no want: wrong operator (== instead of !=)
+		t.Fatal(err)
+	}
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+func TestNoFlagNonErrorType(t *testing.T) {
+	c := qt.New(t)
+
+	var p *int
+	if p != nil { // no want: p is not of type error
+		t.Fatal(p)
+	}
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+func TestNoFlagNoQtC(t *testing.T) {
+	err := returnsErr()
+	if err != nil { // no want: no *qt.C variable in scope
+		t.Fatal(err)
+	}
+}
+
+func TestNoFlagMismatchedError(t *testing.T) {
+	c := qt.New(t)
+
+	err1 := returnsErr()
+	err2 := returnsErr()
+	if err1 != nil { // no want: err1 in condition but err2 in Fatal
+		t.Fatal(err2)
+	}
+
+	c.Assert(1, qt.Equals, 1)
+}

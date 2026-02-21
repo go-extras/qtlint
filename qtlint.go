@@ -31,7 +31,7 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
-// analyzer is a holder for per-instance configuration flags (currently unused).
+// analyzer is the receiver for analysis pass methods.
 type analyzer struct{}
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
@@ -781,6 +781,43 @@ func isFromTestingPkg(s *types.Selection) bool {
 	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "testing"
 }
 
+// errMismatch reports whether the call clearly uses a different error variable
+// than errExpr in its direct (non-spread) arguments. When the call uses spread
+// arguments we cannot trace into the slice, so we conservatively return false
+// (i.e. no detected mismatch, allow the rule to fire).
+func errMismatch(pass *analysis.Pass, errExpr ast.Expr, call *ast.CallExpr) bool {
+	// Spread args: can't trace into the slice — assume no mismatch.
+	if call.Ellipsis != token.NoPos {
+		return false
+	}
+
+	// Only check when errExpr is a simple identifier with a resolved object.
+	errIdent, ok := errExpr.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	errObj := pass.TypesInfo.Uses[errIdent]
+	if errObj == nil {
+		return false
+	}
+
+	// Look for a direct arg that is an error-typed identifier distinct from errExpr.
+	for _, arg := range call.Args {
+		argIdent, ok := arg.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		argObj := pass.TypesInfo.Uses[argIdent]
+		if argObj == nil {
+			continue
+		}
+		if isErrorType(pass, argIdent) && argObj != errObj {
+			return true
+		}
+	}
+	return false
+}
+
 func (*analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 	m, ok := matchErrNilFatal(pass, ifStmt)
 	if !ok {
@@ -791,6 +828,11 @@ func (*analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt
 	// flag calls to custom types that happen to have a Fatal/Error method.
 	selection, selOk := pass.TypesInfo.Selections[m.sel]
 	if !selOk || !isFromTestingPkg(selection) {
+		return
+	}
+
+	// Don't fire when the call clearly uses a different error variable.
+	if errMismatch(pass, m.errExpr, m.call) {
 		return
 	}
 
