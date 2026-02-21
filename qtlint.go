@@ -932,8 +932,8 @@ func formatCallArgs(pass *analysis.Pass, call *ast.CallExpr) ([]string, bool) {
 	return args, true
 }
 
-// buildSpreadCommentf returns the qt.Commentf(...) text for a spread call
-// (t.Fatalf(fmt, args...) or t.Fatal(args...)), and reports that a "fmt" import is needed.
+// buildSpreadCommentf returns the Commentf option text for a spread call
+// and reports that a "fmt" import is needed.
 func buildSpreadCommentf(qtAlias, methodName string, args []string) (string, bool) {
 	if len(args) == 0 {
 		return "", false
@@ -950,8 +950,7 @@ func buildSpreadCommentf(qtAlias, methodName string, args []string) (string, boo
 	}
 }
 
-// buildDirectCommentf returns the qt.Commentf(...) text for a non-spread call
-// (t.Fatalf(fmt, a, b) or t.Fatal(a, b, c)).
+// buildDirectCommentf returns the Commentf option text for a non-spread call.
 func buildDirectCommentf(qtAlias, methodName string, args []string) string {
 	if len(args) == 0 {
 		return ""
