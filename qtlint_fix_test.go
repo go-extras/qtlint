@@ -15,4 +15,5 @@ func TestFixes(t *testing.T) {
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "eqistruefix")
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "nilcmpfix")
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "errcheckfix")
+	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "errcheckfmtalias")
 }

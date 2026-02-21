@@ -869,7 +869,11 @@ func checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 	var commentText string
 	var needsFmtImport bool
 	if m.call.Ellipsis != token.NoPos {
-		commentText, needsFmtImport = buildSpreadCommentf(qtAlias, m.methodName, args)
+		var fmtAlias string
+		if f := fileForPos(pass, ifStmt.Pos()); f != nil {
+			fmtAlias = fmtPkgAlias(f)
+		}
+		commentText, needsFmtImport = buildSpreadCommentf(qtAlias, fmtAlias, m.methodName, args)
 	} else {
 		commentText = buildDirectCommentf(qtAlias, m.methodName, args)
 	}
@@ -932,21 +936,45 @@ func formatCallArgs(pass *analysis.Pass, call *ast.CallExpr) ([]string, bool) {
 	return args, true
 }
 
+// fmtPkgAlias returns the local identifier used to access the "fmt" package
+// in file, or an empty string if "fmt" is not imported or uses a blank/dot import.
+func fmtPkgAlias(file *ast.File) string {
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != "fmt" {
+			continue
+		}
+		if imp.Name == nil {
+			return "fmt"
+		}
+		if imp.Name.Name != "_" && imp.Name.Name != "." {
+			return imp.Name.Name
+		}
+		return ""
+	}
+	return ""
+}
+
 // buildSpreadCommentf returns the Commentf option text for a spread call
-// and reports that a "fmt" import is needed.
-func buildSpreadCommentf(qtAlias, methodName string, args []string) (string, bool) {
+// and reports that a "fmt" import needs to be added.
+// Pass an empty fmtAlias when fmt is not yet imported; "fmt" will be used as the identifier.
+func buildSpreadCommentf(qtAlias, fmtAlias, methodName string, args []string) (string, bool) {
 	if len(args) == 0 {
 		return "", false
+	}
+	needsFmt := fmtAlias == ""
+	if needsFmt {
+		fmtAlias = "fmt"
 	}
 	joined := strings.Join(args, ", ")
 	switch methodName {
 	case "Fatalf", "Errorf":
 		// Spread: pre-render the message so we don't repeat the format string
 		// with unknown arity directly in Commentf.
-		return fmt.Sprintf("%s.Commentf(fmt.Sprintf(%s))", qtAlias, joined), true
+		return fmt.Sprintf("%s.Commentf(%s.Sprintf(%s))", qtAlias, fmtAlias, joined), needsFmt
 	default: // Fatal, Error
 		// Collect all args into a single string via fmt.Sprint.
-		return fmt.Sprintf("%s.Commentf(fmt.Sprint(%s))", qtAlias, joined), true
+		return fmt.Sprintf("%s.Commentf(%s.Sprint(%s))", qtAlias, fmtAlias, joined), needsFmt
 	}
 }
 

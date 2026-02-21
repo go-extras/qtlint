@@ -1,0 +1,32 @@
+package errcheckfmtalias
+
+import (
+	f "fmt"
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+)
+
+func returnsErr() error {
+	return f.Errorf("boom")
+}
+
+func TestFatalSpreadWithFmtAlias(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	args := []any{"unexpected:", err}
+	c.Assert(err, qt.IsNil, qt.Commentf(f.Sprint(args...)))
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+func TestFatalfSpreadWithFmtAlias(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	args := []any{err, 123}
+	c.Assert(err, qt.IsNil, qt.Commentf(f.Sprintf("unexpected: %v %v", args...)))
+
+	c.Assert(1, qt.Equals, 1)
+}
