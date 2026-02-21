@@ -40,4 +40,9 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "nilcmp")
 	})
+
+	t.Run("err != nil with t.Fatal/t.Error", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "errcheck")
+	})
 }

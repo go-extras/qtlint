@@ -12,6 +12,8 @@
 //   - x != y, qt.IsFalse which should be replaced with x, qt.Equals, y
 //   - x == nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNil/qt.IsNotNil
 //   - x != nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNotNil/qt.IsNil
+//   - if err != nil { t.Fatal[f](...) } which should be replaced with c.Assert(err, qt.IsNil, qt.Commentf(...))
+//   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
 //
 // This linter is designed to be used as a custom linter for golangci-lint.
 package qtlint
@@ -29,12 +31,16 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
+// analyzer is a holder for per-instance configuration flags (currently unused).
+type analyzer struct{}
+
 // NewAnalyzer creates a new instance of the qtlint analyzer.
 func NewAnalyzer() *analysis.Analyzer {
+	a := &analyzer{}
 	return &analysis.Analyzer{
 		Name:     "qtlint",
 		Doc:      "enforces best practices for quicktest usage",
-		Run:      run,
+		Run:      a.run,
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 	}
 }
@@ -50,24 +56,26 @@ var replacements = map[string]string{
 	"IsFalse": "IsTrue",
 }
 
-func run(pass *analysis.Pass) (any, error) {
+func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 	result := pass.ResultOf[inspect.Analyzer]
 	insp, ok := result.(*inspector.Inspector)
 	if !ok {
 		return nil, nil
 	}
 
-	// Filter for call expressions
+	// Filter for nodes we want to inspect.
 	nodeFilter := []ast.Node{
 		(*ast.CallExpr)(nil),
+		(*ast.IfStmt)(nil),
 	}
 
 	insp.Preorder(nodeFilter, func(n ast.Node) {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			checkQuicktestCall(pass, n)
+		case *ast.IfStmt:
+			a.checkErrNilFatalPattern(pass, n)
 		}
-		checkQuicktestCall(pass, call)
 	})
 
 	return nil, nil
@@ -602,4 +610,216 @@ func checkEqualityComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) {
 		},
 	}
 	pass.Report(diagnostic)
+}
+
+func stripParens(expr ast.Expr) ast.Expr {
+	for {
+		p, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = p.X
+	}
+}
+
+func formatNode(pass *analysis.Pass, node ast.Node) (string, bool) {
+	var buf bytes.Buffer
+	if err := format.Node(&buf, pass.Fset, node); err != nil {
+		return "", false
+	}
+	return buf.String(), true
+}
+
+// formatExpr formats an AST expression node.
+//
+// It exists as a semantic wrapper around formatNode to clearly indicate
+// that only ast.Expr values are expected at the call sites, even though
+// it currently delegates directly to formatNode.
+func formatExpr(pass *analysis.Pass, expr ast.Expr) (string, bool) {
+	return formatNode(pass, expr)
+}
+
+func isErrorType(pass *analysis.Pass, expr ast.Expr) bool {
+	t := pass.TypesInfo.TypeOf(expr)
+	if t == nil {
+		return false
+	}
+
+	errTypeObj := types.Universe.Lookup("error")
+	if errTypeObj == nil {
+		return false
+	}
+	errType := errTypeObj.Type()
+
+	return types.AssignableTo(t, errType)
+}
+
+func findQuicktestPkgAlias(pass *analysis.Pass, start ast.Node) string {
+	scope := pass.TypesInfo.Scopes[start]
+	if scope == nil {
+		return ""
+	}
+	for ; scope != nil; scope = scope.Parent() {
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			pkgName, ok := obj.(*types.PkgName)
+			if !ok {
+				continue
+			}
+			if pkgName.Imported().Path() == "github.com/frankban/quicktest" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+func isQuicktestCType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false
+	}
+	return obj.Pkg().Path() == "github.com/frankban/quicktest" && obj.Name() == "C"
+}
+
+func findQuicktestCVarName(pass *analysis.Pass, start ast.Node) string {
+	scope := pass.TypesInfo.Scopes[start]
+	if scope == nil {
+		return ""
+	}
+	for ; scope != nil; scope = scope.Parent() {
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			v, ok := obj.(*types.Var)
+			if !ok {
+				continue
+			}
+			if isQuicktestCType(v.Type()) {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+// errNilFatalMatch holds the pattern parsed by matchErrNilFatal.
+type errNilFatalMatch struct {
+	errExpr    ast.Expr
+	call       *ast.CallExpr
+	sel        *ast.SelectorExpr
+	methodName string // "Fatal", "Fatalf", "Error", or "Errorf"
+	qtMethod   string // "Assert" or "Check"
+}
+
+// matchErrNilFatal validates and parses ifStmt into an errNilFatalMatch.
+func matchErrNilFatal(pass *analysis.Pass, ifStmt *ast.IfStmt) (errNilFatalMatch, bool) {
+	if ifStmt == nil || ifStmt.Else != nil {
+		return errNilFatalMatch{}, false
+	}
+
+	cond := stripParens(ifStmt.Cond)
+	binExpr, ok := cond.(*ast.BinaryExpr)
+	if !ok || binExpr.Op != token.NEQ {
+		return errNilFatalMatch{}, false
+	}
+
+	// Match: <expr> != nil (or nil != <expr>) where <expr> is assignable to error.
+	var errExpr ast.Expr
+	switch {
+	case isNilIdent(binExpr.Y):
+		errExpr = binExpr.X
+	case isNilIdent(binExpr.X):
+		errExpr = binExpr.Y
+	default:
+		return errNilFatalMatch{}, false
+	}
+	if !isErrorType(pass, errExpr) {
+		return errNilFatalMatch{}, false
+	}
+
+	if len(ifStmt.Body.List) != 1 {
+		return errNilFatalMatch{}, false
+	}
+
+	exprStmt, ok := ifStmt.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return errNilFatalMatch{}, false
+	}
+	call, ok := exprStmt.X.(*ast.CallExpr)
+	if !ok {
+		return errNilFatalMatch{}, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return errNilFatalMatch{}, false
+	}
+
+	switch sel.Sel.Name {
+	case "Fatal", "Fatalf":
+		return errNilFatalMatch{errExpr, call, sel, sel.Sel.Name, "Assert"}, true
+	case "Error", "Errorf":
+		return errNilFatalMatch{errExpr, call, sel, sel.Sel.Name, "Check"}, true
+	default:
+		return errNilFatalMatch{}, false
+	}
+}
+
+// isFromTestingPkg reports whether the method in s is defined in the testing package.
+func isFromTestingPkg(s *types.Selection) bool {
+	obj := s.Obj()
+	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "testing"
+}
+
+func (*analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
+	m, ok := matchErrNilFatal(pass, ifStmt)
+	if !ok {
+		return
+	}
+
+	// Verify the method belongs to the testing package so we don't accidentally
+	// flag calls to custom types that happen to have a Fatal/Error method.
+	selection, selOk := pass.TypesInfo.Selections[m.sel]
+	if !selOk || !isFromTestingPkg(selection) {
+		return
+	}
+
+	// The scope attached to the body is a good starting point for finding visible names.
+	startScopeNode := ast.Node(ifStmt.Body)
+	qtAlias := findQuicktestPkgAlias(pass, startScopeNode)
+	cVar := findQuicktestCVarName(pass, startScopeNode)
+	if qtAlias == "" || cVar == "" {
+		return
+	}
+
+	errText, ok := formatExpr(pass, m.errExpr)
+	if !ok {
+		return
+	}
+
+	receiverText, ok := formatExpr(pass, m.sel.X)
+	if !ok {
+		return
+	}
+
+	shortAssertText := fmt.Sprintf("%s.%s(%s, %s.IsNil)", cVar, m.qtMethod, errText, qtAlias)
+	if len(m.call.Args) > 0 {
+		shortAssertText = fmt.Sprintf("%s.%s(%s, %s.IsNil, %s.Commentf(...))", cVar, m.qtMethod, errText, qtAlias, qtAlias)
+	}
+
+	pass.Report(analysis.Diagnostic{
+		Pos:     ifStmt.Pos(),
+		End:     ifStmt.End(),
+		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
+	})
 }
