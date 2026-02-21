@@ -716,7 +716,6 @@ func findQuicktestCVarName(pass *analysis.Pass, start ast.Node) string {
 // errNilFatalMatch holds the pattern parsed by matchErrNilFatal.
 type errNilFatalMatch struct {
 	errExpr    ast.Expr
-	errExpr    ast.Expr
 	call       *ast.CallExpr
 	sel        *ast.SelectorExpr
 	methodName string // "Fatal", "Fatalf", "Error", or "Errorf"
