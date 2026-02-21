@@ -31,7 +31,7 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
-// analyzer holds per-instance configuration flags.
+// analyzer is a holder for per-instance configuration flags (currently unused).
 type analyzer struct{}
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
