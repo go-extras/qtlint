@@ -12,8 +12,8 @@ func TestEqualityIsTrue(t *testing.T) {
 	x := 42
 	y := 42
 
-	qt.Assert(t, x == y, qt.IsTrue)    // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
-	c.Assert(x == y, qt.IsTrue)        // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+	qt.Assert(t, x == y, qt.IsTrue) // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+	c.Assert(x == y, qt.IsTrue)     // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
 }
 
 // Test case: x == y, qt.IsFalse should be replaced with x, qt.Not(qt.Equals), y
@@ -22,8 +22,8 @@ func TestEqualityIsFalse(t *testing.T) {
 	x := 42
 	y := 43
 
-	qt.Assert(t, x == y, qt.IsFalse)    // want `qtlint: use qt.Not\(qt.Equals\) instead of x == y, qt.IsFalse`
-	c.Assert(x == y, qt.IsFalse)        // want `qtlint: use qt.Not\(qt.Equals\) instead of x == y, qt.IsFalse`
+	qt.Assert(t, x == y, qt.IsFalse) // want `qtlint: use qt.Not\(qt.Equals\) instead of x == y, qt.IsFalse`
+	c.Assert(x == y, qt.IsFalse)     // want `qtlint: use qt.Not\(qt.Equals\) instead of x == y, qt.IsFalse`
 }
 
 // Test case: x != y, qt.IsTrue should be replaced with x, qt.Not(qt.Equals), y
@@ -32,8 +32,8 @@ func TestNotEqualityIsTrue(t *testing.T) {
 	x := 42
 	y := 43
 
-	qt.Assert(t, x != y, qt.IsTrue)    // want `qtlint: use qt.Not\(qt.Equals\) instead of x != y, qt.IsTrue`
-	c.Assert(x != y, qt.IsTrue)        // want `qtlint: use qt.Not\(qt.Equals\) instead of x != y, qt.IsTrue`
+	qt.Assert(t, x != y, qt.IsTrue) // want `qtlint: use qt.Not\(qt.Equals\) instead of x != y, qt.IsTrue`
+	c.Assert(x != y, qt.IsTrue)     // want `qtlint: use qt.Not\(qt.Equals\) instead of x != y, qt.IsTrue`
 }
 
 // Test case: x != y, qt.IsFalse should be replaced with x, qt.Equals, y
@@ -42,8 +42,8 @@ func TestNotEqualityIsFalse(t *testing.T) {
 	x := 42
 	y := 42
 
-	qt.Assert(t, x != y, qt.IsFalse)    // want "qtlint: use qt.Equals instead of x != y, qt.IsFalse"
-	c.Assert(x != y, qt.IsFalse)        // want "qtlint: use qt.Equals instead of x != y, qt.IsFalse"
+	qt.Assert(t, x != y, qt.IsFalse) // want "qtlint: use qt.Equals instead of x != y, qt.IsFalse"
+	c.Assert(x != y, qt.IsFalse)     // want "qtlint: use qt.Equals instead of x != y, qt.IsFalse"
 }
 
 // Test case: qt.Check should also be checked
@@ -52,8 +52,8 @@ func TestCheckEqualityIsTrue(t *testing.T) {
 	x := "hello"
 	y := "hello"
 
-	qt.Check(t, x == y, qt.IsTrue)    // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
-	c.Check(x == y, qt.IsTrue)        // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+	qt.Check(t, x == y, qt.IsTrue) // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+	c.Check(x == y, qt.IsTrue)     // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
 }
 
 // Test case: different expressions
@@ -62,8 +62,8 @@ func TestEqualityIsTrueExpressions(t *testing.T) {
 	a := 1
 	b := 2
 
-	qt.Assert(t, a+1 == b, qt.IsTrue)  // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
-	c.Assert(a == b+1, qt.IsTrue)      // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+	qt.Assert(t, a+1 == b, qt.IsTrue) // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+	c.Assert(a == b+1, qt.IsTrue)     // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
 }
 
 // Negative test cases: patterns that should NOT trigger the rule

@@ -22,6 +22,10 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `x == nil, qt.IsFalse` and suggesting `x, qt.IsNotNil`
 - Detecting `x != nil, qt.IsTrue` and suggesting `x, qt.IsNotNil`
 - Detecting `x != nil, qt.IsFalse` and suggesting `x, qt.IsNil`
+- Detecting `strings.Contains(x, y), qt.IsTrue` and suggesting `x, qt.Contains, y`
+- Detecting `strings.Contains(x, y), qt.IsFalse` and suggesting `x, qt.Not(qt.Contains), y`
+- Detecting `slices.Contains(x, y), qt.IsTrue` and suggesting `x, qt.Contains, y`
+- Detecting `slices.Contains(x, y), qt.IsFalse` and suggesting `x, qt.Not(qt.Contains), y`
 - Detecting `if err != nil { t.Fatal[f](...) }` and suggesting `c.Assert(err, qt.IsNil, qt.Commentf(...))`
 - Detecting `if err != nil { t.Error[f](...) }` and suggesting `c.Check(err, qt.IsNil, qt.Commentf(...))`
 
@@ -232,7 +236,37 @@ qtlint: use qt.IsNotNil instead of x != nil, qt.IsTrue
 qtlint: use qt.IsNil instead of x != nil, qt.IsFalse
 ```
 
-### 7. Use `c.Assert(err, qt.IsNil)` instead of `if err != nil { t.Fatal[f](...) }`
+### 7. Use `qt.Contains` instead of `strings.Contains(x, y)` or `slices.Contains(x, y)` with `qt.IsTrue`/`qt.IsFalse`
+
+The quicktest library provides `qt.Contains` as a direct checker for checking if a string, slice, array, or map contains a value. This is more readable than using `strings.Contains` or `slices.Contains` with `qt.IsTrue` or `qt.IsFalse`.
+
+**Bad:**
+```go
+c.Assert(strings.Contains(str, "world"), qt.IsTrue)
+qt.Assert(t, strings.Contains(str, "foo"), qt.IsFalse)
+c.Assert(slices.Contains(slice, 42), qt.IsTrue)
+qt.Assert(t, slices.Contains(slice, 99), qt.IsFalse)
+```
+
+**Good:**
+```go
+c.Assert(str, qt.Contains, "world")
+qt.Assert(t, str, qt.Not(qt.Contains), "foo")
+c.Assert(slice, qt.Contains, 42)
+qt.Assert(t, slice, qt.Not(qt.Contains), 99)
+```
+
+**Auto-fix:** ✅ Automatically replaces `strings.Contains(x, y), qt.IsTrue` with `x, qt.Contains, y`, `strings.Contains(x, y), qt.IsFalse` with `x, qt.Not(qt.Contains), y`, and similarly for `slices.Contains`
+
+**Error message:**
+```
+qtlint: use qt.Contains instead of strings.Contains(x, y), qt.IsTrue
+qtlint: use qt.Not(qt.Contains) instead of strings.Contains(x, y), qt.IsFalse
+qtlint: use qt.Contains instead of slices.Contains(x, y), qt.IsTrue
+qtlint: use qt.Not(qt.Contains) instead of slices.Contains(x, y), qt.IsFalse
+```
+
+### 8. Use `c.Assert(err, qt.IsNil)` instead of `if err != nil { t.Fatal[f](...) }`
 
 When a `*qt.C` variable and a quicktest import are in scope, the pattern `if err != nil { t.Fatal(...) }` should be replaced with a `c.Assert` call.
 
@@ -260,7 +294,7 @@ qtlint: use c.Assert(err, qt.IsNil) instead of t.Fatal(...)
 qtlint: use c.Assert(err, qt.IsNil, qt.Commentf(...)) instead of t.Fatalf(...)
 ```
 
-### 8. Use `c.Check(err, qt.IsNil)` instead of `if err != nil { t.Error[f](...) }`
+### 9. Use `c.Check(err, qt.IsNil)` instead of `if err != nil { t.Error[f](...) }`
 
 Same as rule 7, but for `t.Error`/`t.Errorf` which maps to `c.Check` (non-fatal assertion).
 

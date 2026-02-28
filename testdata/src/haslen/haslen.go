@@ -10,7 +10,7 @@ import (
 func TestLenEquals(t *testing.T) {
 	c := qt.New(t)
 	x := []int{1, 2, 3}
-	
+
 	qt.Assert(t, len(x), qt.Equals, 3) // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 	c.Assert(len(x), qt.Equals, 3)     // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 }
@@ -19,7 +19,7 @@ func TestLenEquals(t *testing.T) {
 func TestCheckLenEquals(t *testing.T) {
 	c := qt.New(t)
 	x := "hello"
-	
+
 	qt.Check(t, len(x), qt.Equals, 5) // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 	c.Check(len(x), qt.Equals, 5)     // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 }
@@ -79,4 +79,3 @@ func TestUserDefinedLen(t *testing.T) {
 	qt.Assert(t, len("test"), qt.Equals, 100)
 	c.Assert(len("test"), qt.Equals, 100)
 }
-

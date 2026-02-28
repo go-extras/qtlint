@@ -81,7 +81,7 @@ func TestNonNilComparison(t *testing.T) {
 	y := 42
 
 	// These should NOT trigger the nil comparison rule
-	c.Assert(x == y, qt.IsTrue)  // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
+	c.Assert(x == y, qt.IsTrue)     // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
 	qt.Assert(t, x == y, qt.IsTrue) // want "qtlint: use qt.Equals instead of x == y, qt.IsTrue"
 }
 

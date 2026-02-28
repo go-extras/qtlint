@@ -12,6 +12,10 @@
 //   - x != y, qt.IsFalse which should be replaced with x, qt.Equals, y
 //   - x == nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNil/qt.IsNotNil
 //   - x != nil, qt.IsTrue/qt.IsFalse which should be replaced with x, qt.IsNotNil/qt.IsNil
+//   - strings.Contains(x, y), qt.IsTrue which should be replaced with x, qt.Contains, y
+//   - strings.Contains(x, y), qt.IsFalse which should be replaced with x, qt.Not(qt.Contains), y
+//   - slices.Contains(x, y), qt.IsTrue which should be replaced with x, qt.Contains, y
+//   - slices.Contains(x, y), qt.IsFalse which should be replaced with x, qt.Not(qt.Contains), y
 //   - if err != nil { t.Fatal[f](...) } which should be replaced with c.Assert(err, qt.IsNil, qt.Commentf(...))
 //   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
 //
@@ -107,6 +111,9 @@ func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 
 	// Check for x == y / x != y with qt.IsTrue/qt.IsFalse patterns
 	checkEqualityComparisonPattern(pass, call)
+
+	// Check for strings.Contains(x, y) or slices.Contains(x, y) with qt.IsTrue/qt.IsFalse pattern
+	checkContainsPattern(pass, call)
 }
 
 // getCheckerArg extracts the checker argument from a quicktest assertion call.
@@ -585,6 +592,149 @@ func checkEqualityComparisonPattern(pass *analysis.Pass, call *ast.CallExpr) {
 		newCheckerText = pkgIdent.Name + ".Not(" + pkgIdent.Name + ".Equals), " + rhsBuf.String()
 		message = fmt.Sprintf("qtlint: use qt.Not(qt.Equals) instead of x %s y, qt.%s", opStr, checkerName)
 		fixMessage = "Replace with qt.Not(qt.Equals)"
+	}
+
+	diagnostic := analysis.Diagnostic{
+		Pos:     gotArg.Pos(),
+		End:     checkerArg.End(),
+		Message: message,
+		SuggestedFixes: []analysis.SuggestedFix{
+			{
+				Message: fixMessage,
+				TextEdits: []analysis.TextEdit{
+					{
+						Pos:     gotArg.Pos(),
+						End:     gotArg.End(),
+						NewText: []byte(newGotText),
+					},
+					{
+						Pos:     checkerArg.Pos(),
+						End:     checkerArg.End(),
+						NewText: []byte(newCheckerText),
+					},
+				},
+			},
+		},
+	}
+	pass.Report(diagnostic)
+}
+
+// checkContainsPattern checks if the pattern is strings.Contains(x, y) or slices.Contains(x, y) with
+// qt.IsTrue or qt.IsFalse and suggests using qt.Contains or qt.Not(qt.Contains).
+func checkContainsPattern(pass *analysis.Pass, call *ast.CallExpr) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	// Determine the position of the "got" argument based on whether it's
+	// qt.Assert(t, got, checker, ...) or c.Assert(got, checker, ...)
+	var gotArgIndex int
+	if isPackageQualified(pass, sel) {
+		gotArgIndex = 1
+	} else {
+		gotArgIndex = 0
+	}
+
+	// Make sure we have enough arguments
+	if len(call.Args) < gotArgIndex+2 {
+		return
+	}
+
+	gotArg := call.Args[gotArgIndex]
+	checkerArg := call.Args[gotArgIndex+1]
+
+	// Check if gotArg is a call to Contains
+	containsCall, ok := gotArg.(*ast.CallExpr)
+	if !ok {
+		return
+	}
+
+	containsSel, ok := containsCall.Fun.(*ast.SelectorExpr)
+	if !ok || containsSel.Sel.Name != "Contains" {
+		return
+	}
+
+	// Check if it's from the strings or slices package
+	pkgIdent, ok := containsSel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+
+	obj := pass.TypesInfo.Uses[pkgIdent]
+	if obj == nil {
+		return
+	}
+
+	pkgName, ok := obj.(*types.PkgName)
+	if !ok {
+		return
+	}
+
+	pkgPath := pkgName.Imported().Path()
+	if pkgPath != "strings" && pkgPath != "slices" {
+		return
+	}
+
+	// Check if Contains has exactly 2 arguments
+	if len(containsCall.Args) != 2 {
+		return
+	}
+
+	// Check if the checker is qt.IsTrue or qt.IsFalse
+	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	checkerName := checkerSel.Sel.Name
+	if checkerName != "IsTrue" && checkerName != "IsFalse" {
+		return
+	}
+
+	if !isPackageQualified(pass, checkerSel) {
+		return
+	}
+
+	// Get the package identifier (e.g., "qt" in qt.IsTrue)
+	qtPkgIdent, ok := checkerSel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+
+	// Format the arguments to Contains
+	firstArg := containsCall.Args[0]
+	secondArg := containsCall.Args[1]
+
+	var firstBuf bytes.Buffer
+	if err := format.Node(&firstBuf, pass.Fset, firstArg); err != nil {
+		return
+	}
+
+	var secondBuf bytes.Buffer
+	if err := format.Node(&secondBuf, pass.Fset, secondArg); err != nil {
+		return
+	}
+
+	// Determine whether to use qt.Contains or qt.Not(qt.Contains)
+	// strings.Contains(x, y), qt.IsTrue  -> x, qt.Contains, y
+	// strings.Contains(x, y), qt.IsFalse -> x, qt.Not(qt.Contains), y
+	// slices.Contains(x, y), qt.IsTrue   -> x, qt.Contains, y
+	// slices.Contains(x, y), qt.IsFalse  -> x, qt.Not(qt.Contains), y
+	useContains := checkerName == "IsTrue"
+
+	newGotText := firstBuf.String()
+	var newCheckerText, message, fixMessage string
+	pkgNameStr := pkgIdent.Name // e.g., "strings" or "slices"
+
+	if useContains {
+		newCheckerText = qtPkgIdent.Name + ".Contains, " + secondBuf.String()
+		message = fmt.Sprintf("qtlint: use qt.Contains instead of %s.Contains(x, y), qt.IsTrue", pkgNameStr)
+		fixMessage = "Replace with qt.Contains"
+	} else {
+		newCheckerText = qtPkgIdent.Name + ".Not(" + qtPkgIdent.Name + ".Contains), " + secondBuf.String()
+		message = fmt.Sprintf("qtlint: use qt.Not(qt.Contains) instead of %s.Contains(x, y), qt.IsFalse", pkgNameStr)
+		fixMessage = "Replace with qt.Not(qt.Contains)"
 	}
 
 	diagnostic := analysis.Diagnostic{
