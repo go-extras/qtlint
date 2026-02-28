@@ -29,4 +29,3 @@ func TestMultiplePatterns(t *testing.T) {
 	c.Assert(x, qt.Not(qt.IsNil))      // want "qtlint: use qt.IsNotNil instead of qt.Not\\(qt.IsNil\\)"
 	c.Assert(value, qt.Not(qt.IsTrue)) // want "qtlint: use qt.IsFalse instead of qt.Not\\(qt.IsTrue\\)"
 }
-

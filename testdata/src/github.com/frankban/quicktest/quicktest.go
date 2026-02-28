@@ -44,17 +44,16 @@ type Checker interface{}
 
 // Checkers
 var (
-	IsNil     Checker
-	IsNotNil  Checker
-	IsTrue    Checker
-	IsFalse   Checker
-	Equals    Checker
+	IsNil      Checker
+	IsNotNil   Checker
+	IsTrue     Checker
+	IsFalse    Checker
+	Equals     Checker
 	DeepEquals Checker
-	HasLen    Checker
+	HasLen     Checker
 )
 
 // Not returns a Checker negating the given Checker.
 func Not(checker Checker) Checker {
 	return nil
 }
-

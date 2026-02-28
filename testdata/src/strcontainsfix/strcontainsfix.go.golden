@@ -1,0 +1,66 @@
+package strcontainsfix
+
+import (
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+)
+
+// Test case: strings.Contains(x, y), qt.IsTrue should be replaced with x, qt.Contains, y
+func TestStringsContainsIsTrue(t *testing.T) {
+	c := qt.New(t)
+	str := "hello world"
+	
+	qt.Assert(t, str, qt.Contains, "world") // want "qtlint: use qt.Contains instead of strings.Contains\\(x, y\\), qt.IsTrue"
+	c.Assert(str, qt.Contains, "world")     // want "qtlint: use qt.Contains instead of strings.Contains\\(x, y\\), qt.IsTrue"
+}
+
+// Test case: strings.Contains(x, y), qt.IsFalse should be replaced with x, qt.Not(qt.Contains), y
+func TestStringsContainsIsFalse(t *testing.T) {
+	c := qt.New(t)
+	str := "hello world"
+	
+	qt.Assert(t, str, qt.Not(qt.Contains), "foo") // want "qtlint: use qt.Not\\(qt.Contains\\) instead of strings.Contains\\(x, y\\), qt.IsFalse"
+	c.Assert(str, qt.Not(qt.Contains), "foo")     // want "qtlint: use qt.Not\\(qt.Contains\\) instead of strings.Contains\\(x, y\\), qt.IsFalse"
+}
+
+// Test case: qt.Check should also be checked
+func TestCheckStringsContains(t *testing.T) {
+	c := qt.New(t)
+	str := "test string"
+	
+	qt.Check(t, str, qt.Contains, "test")          // want "qtlint: use qt.Contains instead of strings.Contains\\(x, y\\), qt.IsTrue"
+	c.Check(str, qt.Contains, "test")              // want "qtlint: use qt.Contains instead of strings.Contains\\(x, y\\), qt.IsTrue"
+	qt.Check(t, str, qt.Not(qt.Contains), "foo")   // want "qtlint: use qt.Not\\(qt.Contains\\) instead of strings.Contains\\(x, y\\), qt.IsFalse"
+	c.Check(str, qt.Not(qt.Contains), "foo")       // want "qtlint: use qt.Not\\(qt.Contains\\) instead of strings.Contains\\(x, y\\), qt.IsFalse"
+}
+
+// Test case: different variable names and expressions
+func TestStringsContainsVariableNames(t *testing.T) {
+	c := qt.New(t)
+	myString := "example text"
+	substring := "text"
+
+	qt.Assert(t, myString, qt.Contains, substring)    // want "qtlint: use qt.Contains instead of strings.Contains\\(x, y\\), qt.IsTrue"
+	c.Assert(myString, qt.Contains, "example")        // want "qtlint: use qt.Contains instead of strings.Contains\\(x, y\\), qt.IsTrue"
+	qt.Assert(t, "literal", qt.Contains, "lit")       // want "qtlint: use qt.Contains instead of strings.Contains\\(x, y\\), qt.IsTrue"
+}
+
+// Test case: slices.Contains(x, y), qt.IsTrue should be replaced with x, qt.Contains, y
+func TestSlicesContainsIsTrue(t *testing.T) {
+	c := qt.New(t)
+	slice := []int{1, 2, 3}
+
+	qt.Assert(t, slice, qt.Contains, 2) // want "qtlint: use qt.Contains instead of slices.Contains\\(x, y\\), qt.IsTrue"
+	c.Assert(slice, qt.Contains, 2)     // want "qtlint: use qt.Contains instead of slices.Contains\\(x, y\\), qt.IsTrue"
+}
+
+// Test case: slices.Contains(x, y), qt.IsFalse should be replaced with x, qt.Not(qt.Contains), y
+func TestSlicesContainsIsFalse(t *testing.T) {
+	c := qt.New(t)
+	slice := []string{"a", "b", "c"}
+
+	qt.Assert(t, slice, qt.Not(qt.Contains), "d") // want "qtlint: use qt.Not\\(qt.Contains\\) instead of slices.Contains\\(x, y\\), qt.IsFalse"
+	c.Assert(slice, qt.Not(qt.Contains), "d")     // want "qtlint: use qt.Not\\(qt.Contains\\) instead of slices.Contains\\(x, y\\), qt.IsFalse"
+}
+

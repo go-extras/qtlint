@@ -46,4 +46,3 @@ func TestIsNil(t *testing.T) {
 	c.Assert(x, qt.IsNil)
 	qt.Assert(t, x, qt.IsNil)
 }
-

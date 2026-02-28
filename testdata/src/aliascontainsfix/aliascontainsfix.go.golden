@@ -1,0 +1,26 @@
+package aliascontainsfix
+
+import (
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+)
+
+// Test case: strings.Contains with alias
+func TestStringsContainsWithAlias(t *testing.T) {
+	c := qt.New(t)
+	str := "hello world"
+	
+	qt.Assert(t, str, qt.Contains, "world")      // want "qtlint: use qt.Contains instead of mystrings.Contains\\(x, y\\), qt.IsTrue"
+	c.Assert(str, qt.Not(qt.Contains), "foo")    // want "qtlint: use qt.Not\\(qt.Contains\\) instead of mystrings.Contains\\(x, y\\), qt.IsFalse"
+}
+
+// Test case: slices.Contains with alias
+func TestSlicesContainsWithAlias(t *testing.T) {
+	c := qt.New(t)
+	slice := []int{1, 2, 3}
+	
+	qt.Assert(t, slice, qt.Contains, 2)          // want "qtlint: use qt.Contains instead of myslices.Contains\\(x, y\\), qt.IsTrue"
+	c.Assert(slice, qt.Not(qt.Contains), 99)     // want "qtlint: use qt.Not\\(qt.Contains\\) instead of myslices.Contains\\(x, y\\), qt.IsFalse"
+}
+

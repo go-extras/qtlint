@@ -45,4 +45,14 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "errcheck")
 	})
+
+	t.Run("strings.Contains and slices.Contains patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "strcontains")
+	})
+
+	t.Run("Contains patterns with package aliases", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "aliascontains")
+	})
 }

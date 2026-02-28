@@ -37,4 +37,3 @@ func TestCheckNotIsNil(t *testing.T) {
 	qt.Check(t, x, qt.Not(qt.IsNil)) // want "qtlint: use qt.IsNotNil instead of qt.Not\\(qt.IsNil\\)"
 	c.Check(x, qt.Not(qt.IsNil))     // want "qtlint: use qt.IsNotNil instead of qt.Not\\(qt.IsNil\\)"
 }
-
