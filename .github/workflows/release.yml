@@ -23,13 +23,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - id: vars
-        uses: ./.github/actions/vars
-
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ steps.vars.outputs.go_version }}
+          go-version: stable
           cache: true
           cache-dependency-path: go.sum
 
@@ -63,4 +60,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
