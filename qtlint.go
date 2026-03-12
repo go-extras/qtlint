@@ -271,25 +271,100 @@ func isQuicktestCMethod(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 	return obj.Pkg().Path() == "github.com/frankban/quicktest" && obj.Name() == "C"
 }
 
-// checkLenEqualsPattern checks if the pattern is len(x), qt.Equals and suggests x, qt.HasLen.
+// hasLenCheckerInfo holds the resolved information for a HasLen checker replacement.
+type hasLenCheckerInfo struct {
+	diagMessage    string
+	fixMessage     string
+	newCheckerText string
+	editPos        token.Pos
+	editEnd        token.Pos
+}
+
+// extractBuiltinLenArg returns the single argument of a builtin len() call, or
+// (nil, false) if expr is not such a call.
+func extractBuiltinLenArg(pass *analysis.Pass, expr ast.Expr) (ast.Expr, bool) {
+	lenCall, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	lenIdent, ok := lenCall.Fun.(*ast.Ident)
+	if !ok || lenIdent.Name != "len" {
+		return nil, false
+	}
+	obj := pass.TypesInfo.Uses[lenIdent]
+	if obj == nil {
+		return nil, false
+	}
+	if _, ok := obj.(*types.Builtin); !ok {
+		return nil, false
+	}
+	if len(lenCall.Args) != 1 {
+		return nil, false
+	}
+	return lenCall.Args[0], true
+}
+
+// resolveHasLenChecker inspects checkerArg and returns a hasLenCheckerInfo when
+// the checker is qt.Equals or qt.Not(qt.Equals).
+func resolveHasLenChecker(pass *analysis.Pass, checkerArg ast.Expr) (hasLenCheckerInfo, bool) {
+	switch checker := checkerArg.(type) {
+	case *ast.SelectorExpr:
+		if checker.Sel.Name != "Equals" || !isPackageQualified(pass, checker) {
+			return hasLenCheckerInfo{}, false
+		}
+		pkgIdent, ok := checker.X.(*ast.Ident)
+		if !ok {
+			return hasLenCheckerInfo{}, false
+		}
+		return hasLenCheckerInfo{
+			diagMessage:    "qtlint: use qt.HasLen instead of len(x), qt.Equals",
+			fixMessage:     "Replace with qt.HasLen",
+			newCheckerText: pkgIdent.Name + ".HasLen",
+			editPos:        checkerArg.Pos(),
+			editEnd:        checkerArg.End(),
+		}, true
+
+	case *ast.CallExpr:
+		notSel, ok := checker.Fun.(*ast.SelectorExpr)
+		if !ok || notSel.Sel.Name != "Not" || !isPackageQualified(pass, notSel) {
+			return hasLenCheckerInfo{}, false
+		}
+		if len(checker.Args) != 1 {
+			return hasLenCheckerInfo{}, false
+		}
+		innerSel, ok := checker.Args[0].(*ast.SelectorExpr)
+		if !ok || innerSel.Sel.Name != "Equals" || !isPackageQualified(pass, innerSel) {
+			return hasLenCheckerInfo{}, false
+		}
+		pkgIdent, ok := innerSel.X.(*ast.Ident)
+		if !ok {
+			return hasLenCheckerInfo{}, false
+		}
+		return hasLenCheckerInfo{
+			diagMessage:    "qtlint: use qt.Not(qt.HasLen) instead of len(x), qt.Not(qt.Equals)",
+			fixMessage:     "Replace with qt.Not(qt.HasLen)",
+			newCheckerText: pkgIdent.Name + ".HasLen",
+			editPos:        innerSel.Pos(),
+			editEnd:        innerSel.End(),
+		}, true
+
+	default:
+		return hasLenCheckerInfo{}, false
+	}
+}
+
+// checkLenEqualsPattern checks if the pattern is len(x), qt.Equals or len(x), qt.Not(qt.Equals)
+// and suggests using x, qt.HasLen (or its negation) instead.
 func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return
 	}
 
-	// Determine the position of the "got" argument based on whether it's
-	// qt.Assert(t, got, checker, ...) or c.Assert(got, checker, ...)
-	var gotArgIndex int
+	gotArgIndex := 0
 	if isPackageQualified(pass, sel) {
-		// qt.Assert(t, got, checker, ...) - got is at index 1
 		gotArgIndex = 1
-	} else {
-		// c.Assert(got, checker, ...) - got is at index 0
-		gotArgIndex = 0
 	}
-
-	// Make sure we have enough arguments
 	if len(call.Args) < gotArgIndex+2 {
 		return
 	}
@@ -297,70 +372,28 @@ func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 	gotArg := call.Args[gotArgIndex]
 	checkerArg := call.Args[gotArgIndex+1]
 
-	// Check if gotArg is a call to len()
-	lenCall, ok := gotArg.(*ast.CallExpr)
+	lenArg, ok := extractBuiltinLenArg(pass, gotArg)
 	if !ok {
 		return
 	}
 
-	lenIdent, ok := lenCall.Fun.(*ast.Ident)
-	if !ok || lenIdent.Name != "len" {
-		return
-	}
-
-	// Ensure we're dealing with the builtin len function, not a user-defined one.
-	obj := pass.TypesInfo.Uses[lenIdent]
-	if obj == nil {
-		return
-	}
-	builtin, ok := obj.(*types.Builtin)
-	if !ok || builtin.Name() != "len" {
-		return
-	}
-
-	// Check if len() has exactly one argument
-	if len(lenCall.Args) != 1 {
-		return
-	}
-
-	// Check if the checker is qt.Equals
-	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
+	newGotText, ok := formatExpr(pass, lenArg)
 	if !ok {
 		return
 	}
 
-	if checkerSel.Sel.Name != "Equals" {
-		return
-	}
-
-	if !isPackageQualified(pass, checkerSel) {
-		return
-	}
-
-	// Get the package identifier (e.g., "qt" in qt.Equals)
-	pkgIdent, ok := checkerSel.X.(*ast.Ident)
+	info, ok := resolveHasLenChecker(pass, checkerArg)
 	if !ok {
 		return
 	}
 
-	// Get the argument to len()
-	lenArg := lenCall.Args[0]
-
-	// Create the replacement text by formatting the AST node
-	var buf bytes.Buffer
-	if err := format.Node(&buf, pass.Fset, lenArg); err != nil {
-		return
-	}
-	newGotText := buf.String()
-	newCheckerText := pkgIdent.Name + ".HasLen"
-
-	diagnostic := analysis.Diagnostic{
+	pass.Report(analysis.Diagnostic{
 		Pos:     gotArg.Pos(),
 		End:     checkerArg.End(),
-		Message: "qtlint: use qt.HasLen instead of len(x), qt.Equals",
+		Message: info.diagMessage,
 		SuggestedFixes: []analysis.SuggestedFix{
 			{
-				Message: "Replace with qt.HasLen",
+				Message: info.fixMessage,
 				TextEdits: []analysis.TextEdit{
 					{
 						Pos:     gotArg.Pos(),
@@ -368,15 +401,14 @@ func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 						NewText: []byte(newGotText),
 					},
 					{
-						Pos:     checkerArg.Pos(),
-						End:     checkerArg.End(),
-						NewText: []byte(newCheckerText),
+						Pos:     info.editPos,
+						End:     info.editEnd,
+						NewText: []byte(info.newCheckerText),
 					},
 				},
 			},
 		},
-	}
-	pass.Report(diagnostic)
+	})
 }
 
 // isNilIdent checks if an expression is the nil identifier.

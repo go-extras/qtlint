@@ -15,17 +15,20 @@ jobs:
   golangci:
     name: lint
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version:
+          - oldstable
+          - stable
     steps:
       # Checkout code
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - id: vars
-        uses: ./.github/actions/vars
-
       - uses: actions/setup-go@v6
         with:
-          go-version: ${{ steps.vars.outputs.go_version }}
+          go-version: ${{ matrix.go-version }}
           cache: true
           cache-dependency-path: go.sum
 
@@ -41,10 +44,9 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           args: --timeout=30m
-          version: ${{ steps.vars.outputs.golangci_lint_version }}
+          version: v2.11.3
 
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
-

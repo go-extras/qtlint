@@ -14,6 +14,7 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `qt.Not(qt.IsTrue)` and suggesting `qt.IsFalse`
 - Detecting `qt.Not(qt.IsFalse)` and suggesting `qt.IsTrue`
 - Detecting `len(x), qt.Equals` and suggesting `x, qt.HasLen`
+- Detecting `len(x), qt.Not(qt.Equals)` and suggesting `x, qt.Not(qt.HasLen)`
 - Detecting `x == y, qt.IsTrue` and suggesting `x, qt.Equals, y`
 - Detecting `x == y, qt.IsFalse` and suggesting `x, qt.Not(qt.Equals), y`
 - Detecting `x != y, qt.IsTrue` and suggesting `x, qt.Not(qt.Equals), y`
@@ -153,27 +154,32 @@ c.Assert(value, qt.IsTrue)
 qtlint: use qt.IsTrue instead of qt.Not(qt.IsFalse)
 ```
 
-### 4. Use `qt.HasLen` instead of `len(x), qt.Equals`
+### 4. Use `qt.HasLen` / `qt.Not(qt.HasLen)` instead of `len(x), qt.Equals` / `len(x), qt.Not(qt.Equals)`
 
-The quicktest library provides `qt.HasLen` as a direct checker for checking the length of slices, arrays, maps, and strings, which is more readable than using `len(x), qt.Equals`.
+The quicktest library provides `qt.HasLen` as a direct checker for checking the length of slices, arrays, maps, and strings, which is more readable than using `len(x), qt.Equals` or `len(x), qt.Not(qt.Equals)`.
 
 **Bad:**
 ```go
 c.Assert(len(mySlice), qt.Equals, 3)
 qt.Assert(t, len(myMap), qt.Equals, 5)
+c.Assert(len(events), qt.Not(qt.Equals), 0)
+qt.Assert(t, len(events), qt.Not(qt.Equals), 0)
 ```
 
 **Good:**
 ```go
 c.Assert(mySlice, qt.HasLen, 3)
 qt.Assert(t, myMap, qt.HasLen, 5)
+c.Assert(events, qt.Not(qt.HasLen), 0)
+qt.Assert(t, events, qt.Not(qt.HasLen), 0)
 ```
 
-**Auto-fix:** ✅ Automatically replaces `len(x), qt.Equals` with `x, qt.HasLen`
+**Auto-fix:** ✅ Automatically replaces `len(x), qt.Equals` with `x, qt.HasLen` and `len(x), qt.Not(qt.Equals)` with `x, qt.Not(qt.HasLen)`
 
-**Error message:**
+**Error messages:**
 ```
 qtlint: use qt.HasLen instead of len(x), qt.Equals
+qtlint: use qt.Not(qt.HasLen) instead of len(x), qt.Not(qt.Equals)
 ```
 
 ### 5. Use `qt.Equals` / `qt.Not(qt.Equals)` instead of equality comparisons with `qt.IsTrue` / `qt.IsFalse`
@@ -340,8 +346,11 @@ func TestExample(t *testing.T) {
     c.Assert(value, qt.Not(qt.IsNil))      // ❌ Will be flagged
     c.Assert(value, qt.IsNotNil)           // ✅ Correct
     
-    // qt.Not with other checkers is allowed
-    c.Assert(value, qt.Not(qt.Equals), 42) // ✅ Allowed
+    // qt.Not(qt.Equals) with a plain value is allowed
+    c.Assert(value, qt.Not(qt.Equals), 42) // ✅ Correct
+    // but qt.Not(qt.Equals) with len() is flagged:
+    c.Assert(len(value), qt.Not(qt.Equals), 0) // ❌ Will be flagged
+    c.Assert(value, qt.Not(qt.HasLen), 0)      // ✅ Correct
 }
 ```
 

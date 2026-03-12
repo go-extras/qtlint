@@ -9,12 +9,23 @@ import (
 func TestLenEqualsFix(t *testing.T) {
 	c := qt.New(t)
 	x := []int{1, 2, 3}
-	
+
 	qt.Assert(t, x, qt.HasLen, 3) // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 	c.Assert(x, qt.HasLen, 3)     // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
-	
+
 	mySlice := []string{"a", "b"}
 	qt.Check(t, mySlice, qt.HasLen, 2) // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 	c.Check(mySlice, qt.HasLen, 2)     // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
+}
+
+func TestLenNotEqualsFix(t *testing.T) {
+	c := qt.New(t)
+	events := []int{1, 2, 3}
+
+	qt.Assert(t, events, qt.Not(qt.HasLen), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+	c.Assert(events, qt.Not(qt.HasLen), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+
+	qt.Check(t, events, qt.Not(qt.HasLen), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+	c.Check(events, qt.Not(qt.HasLen), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
 }
 

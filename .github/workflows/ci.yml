@@ -15,22 +15,6 @@ env:
   COVERAGE_THRESHOLD: 50
 
 jobs:
-  # Setup job to expose variables
-  setup:
-    name: Setup
-    runs-on: ubuntu-latest
-    outputs:
-      go_version: ${{ steps.vars.outputs.go_version }}
-      go_version_min: ${{ steps.vars.outputs.go_version_min }}
-      go_versions_matrix: ${{ steps.vars.outputs.go_versions_matrix }}
-      golangci_lint_version: ${{ steps.vars.outputs.golangci_lint_version }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - id: vars
-        uses: ./.github/actions/vars
-
   # Build verification - ensure library compiles
   build:
     name: Build
@@ -38,7 +22,6 @@ jobs:
     strategy:
       matrix:
         go-version: ${{ fromJSON(needs.setup.outputs.go_versions_matrix) }}
-    needs: setup
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -63,9 +46,11 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        go-version: ${{ fromJSON(needs.setup.outputs.go_versions_matrix) }}
-    needs: setup
+        go-version:
+          - oldstable
+          - stable
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -98,7 +83,7 @@ jobs:
           fi
 
       - name: Upload coverage to Codecov
-        if: matrix.go-version == needs.setup.outputs.go_version
+        if: matrix.go-version == 'stable'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.out
@@ -107,7 +92,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Upload coverage artifacts
-        if: matrix.go-version == needs.setup.outputs.go_version
+        if: matrix.go-version == 'stable'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report
@@ -115,4 +100,3 @@ jobs:
             coverage.out
             coverage.html
             coverage.txt
-

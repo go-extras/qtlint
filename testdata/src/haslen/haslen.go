@@ -46,14 +46,31 @@ func TestHasLenCorrect(t *testing.T) {
 	c.Assert(x, qt.HasLen, 3)
 }
 
-// Test case: len(x) with checkers other than qt.Equals
+// Test case: len(x) with qt.Not(qt.Equals) should be replaced with x, qt.Not(qt.HasLen)
+func TestLenNotEquals(t *testing.T) {
+	c := qt.New(t)
+	x := []int{1, 2, 3}
+
+	qt.Assert(t, len(x), qt.Not(qt.Equals), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+	c.Assert(len(x), qt.Not(qt.Equals), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+}
+
+// Test case: len(x) with qt.Not(qt.Equals) using qt.Check/c.Check should also be replaced with x, qt.Not(qt.HasLen)
+func TestCheckLenNotEquals(t *testing.T) {
+	c := qt.New(t)
+	x := []int{1, 2, 3}
+
+	qt.Check(t, len(x), qt.Not(qt.Equals), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+	c.Check(len(x), qt.Not(qt.Equals), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+}
+// Test case: len(x) with checkers other than qt.Equals or qt.Not(qt.Equals)
 func TestLenWithOtherCheckers(t *testing.T) {
 	c := qt.New(t)
 	x := []int{1, 2, 3}
 
 	// These should not trigger the rule
 	qt.Assert(t, len(x), qt.DeepEquals, 3)
-	c.Assert(len(x), qt.Not(qt.Equals), 0)
+	c.Assert(len(x), qt.Not(qt.DeepEquals), 0)
 }
 
 // Test case: non-len expressions with qt.Equals
