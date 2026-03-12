@@ -350,7 +350,7 @@ func TestExample(t *testing.T) {
     c.Assert(value, qt.Not(qt.Equals), 42) // ✅ Correct
     // but qt.Not(qt.Equals) with len() is flagged:
     c.Assert(len(value), qt.Not(qt.Equals), 0) // ❌ Will be flagged
-    c.Assert(value, qt.Not(qt.HasLen), 0)       // ✅ Correct
+    c.Assert(value, qt.Not(qt.HasLen), 0)      // ✅ Correct
 }
 ```
 
