@@ -323,41 +323,69 @@ func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 		return
 	}
 
-	// Check if the checker is qt.Equals
-	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
-	if !ok {
-		return
-	}
-
-	if checkerSel.Sel.Name != "Equals" {
-		return
-	}
-
-	if !isPackageQualified(pass, checkerSel) {
-		return
-	}
-
-	// Get the package identifier (e.g., "qt" in qt.Equals)
-	pkgIdent, ok := checkerSel.X.(*ast.Ident)
-	if !ok {
-		return
-	}
-
 	// Get the argument to len()
 	lenArg := lenCall.Args[0]
 
-	// Create the replacement text by formatting the AST node
+	// Create the got replacement text by formatting the AST node
 	var buf bytes.Buffer
 	if err := format.Node(&buf, pass.Fset, lenArg); err != nil {
 		return
 	}
 	newGotText := buf.String()
-	newCheckerText := pkgIdent.Name + ".HasLen"
+
+	// Determine checker pattern: qt.Equals or qt.Not(qt.Equals)
+	var (
+		diagMessage    string
+		newCheckerText string
+		equalsEditPos  token.Pos
+		equalsEditEnd  token.Pos
+	)
+
+	switch checker := checkerArg.(type) {
+	case *ast.SelectorExpr:
+		// qt.Equals
+		if checker.Sel.Name != "Equals" || !isPackageQualified(pass, checker) {
+			return
+		}
+		pkgIdent, ok := checker.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+		diagMessage = "qtlint: use qt.HasLen instead of len(x), qt.Equals"
+		newCheckerText = pkgIdent.Name + ".HasLen"
+		equalsEditPos = checkerArg.Pos()
+		equalsEditEnd = checkerArg.End()
+
+	case *ast.CallExpr:
+		// qt.Not(qt.Equals)
+		notSel, ok := checker.Fun.(*ast.SelectorExpr)
+		if !ok || notSel.Sel.Name != "Not" || !isPackageQualified(pass, notSel) {
+			return
+		}
+		if len(checker.Args) != 1 {
+			return
+		}
+		innerSel, ok := checker.Args[0].(*ast.SelectorExpr)
+		if !ok || innerSel.Sel.Name != "Equals" || !isPackageQualified(pass, innerSel) {
+			return
+		}
+		pkgIdent, ok := innerSel.X.(*ast.Ident)
+		if !ok {
+			return
+		}
+		diagMessage = "qtlint: use qt.Not(qt.HasLen) instead of len(x), qt.Not(qt.Equals)"
+		newCheckerText = pkgIdent.Name + ".HasLen"
+		equalsEditPos = innerSel.Pos()
+		equalsEditEnd = innerSel.End()
+
+	default:
+		return
+	}
 
 	diagnostic := analysis.Diagnostic{
 		Pos:     gotArg.Pos(),
 		End:     checkerArg.End(),
-		Message: "qtlint: use qt.HasLen instead of len(x), qt.Equals",
+		Message: diagMessage,
 		SuggestedFixes: []analysis.SuggestedFix{
 			{
 				Message: "Replace with qt.HasLen",
@@ -368,8 +396,8 @@ func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 						NewText: []byte(newGotText),
 					},
 					{
-						Pos:     checkerArg.Pos(),
-						End:     checkerArg.End(),
+						Pos:     equalsEditPos,
+						End:     equalsEditEnd,
 						NewText: []byte(newCheckerText),
 					},
 				},

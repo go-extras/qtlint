@@ -17,3 +17,11 @@ func TestLenEqualsFix(t *testing.T) {
 	qt.Check(t, len(mySlice), qt.Equals, 2) // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 	c.Check(len(mySlice), qt.Equals, 2)     // want "qtlint: use qt.HasLen instead of len\\(x\\), qt.Equals"
 }
+
+func TestLenNotEqualsFix(t *testing.T) {
+	c := qt.New(t)
+	events := []int{1, 2, 3}
+
+	qt.Assert(t, len(events), qt.Not(qt.Equals), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+	c.Assert(len(events), qt.Not(qt.Equals), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+}
