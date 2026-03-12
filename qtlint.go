@@ -350,7 +350,8 @@ func resolveHasLenChecker(pass *analysis.Pass, checkerArg ast.Expr) (hasLenCheck
 	}
 }
 
-// checkLenEqualsPattern checks if the pattern is len(x), qt.Equals and suggests x, qt.HasLen.
+// checkLenEqualsPattern checks if the pattern is len(x), qt.Equals or len(x), qt.Not(qt.Equals)
+// and suggests using x, qt.HasLen (or its negation) instead.
 func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
