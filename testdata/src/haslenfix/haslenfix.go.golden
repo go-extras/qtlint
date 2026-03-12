@@ -24,5 +24,8 @@ func TestLenNotEqualsFix(t *testing.T) {
 
 	qt.Assert(t, events, qt.Not(qt.HasLen), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
 	c.Assert(events, qt.Not(qt.HasLen), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+
+	qt.Check(t, events, qt.Not(qt.HasLen), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
+	c.Check(events, qt.Not(qt.HasLen), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
 }
 

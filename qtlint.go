@@ -274,6 +274,7 @@ func isQuicktestCMethod(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 // hasLenCheckerInfo holds the resolved information for a HasLen checker replacement.
 type hasLenCheckerInfo struct {
 	diagMessage    string
+	fixMessage     string
 	newCheckerText string
 	editPos        token.Pos
 	editEnd        token.Pos
@@ -317,6 +318,7 @@ func resolveHasLenChecker(pass *analysis.Pass, checkerArg ast.Expr) (hasLenCheck
 		}
 		return hasLenCheckerInfo{
 			diagMessage:    "qtlint: use qt.HasLen instead of len(x), qt.Equals",
+			fixMessage:     "Replace with qt.HasLen",
 			newCheckerText: pkgIdent.Name + ".HasLen",
 			editPos:        checkerArg.Pos(),
 			editEnd:        checkerArg.End(),
@@ -340,6 +342,7 @@ func resolveHasLenChecker(pass *analysis.Pass, checkerArg ast.Expr) (hasLenCheck
 		}
 		return hasLenCheckerInfo{
 			diagMessage:    "qtlint: use qt.Not(qt.HasLen) instead of len(x), qt.Not(qt.Equals)",
+			fixMessage:     "Replace with qt.Not(qt.HasLen)",
 			newCheckerText: pkgIdent.Name + ".HasLen",
 			editPos:        innerSel.Pos(),
 			editEnd:        innerSel.End(),
@@ -390,7 +393,7 @@ func checkLenEqualsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 		Message: info.diagMessage,
 		SuggestedFixes: []analysis.SuggestedFix{
 			{
-				Message: "Replace with qt.HasLen",
+				Message: info.fixMessage,
 				TextEdits: []analysis.TextEdit{
 					{
 						Pos:     gotArg.Pos(),
