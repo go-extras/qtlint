@@ -53,6 +53,24 @@ make build
 make install
 ```
 
+### As a pinned tool dependency (Go 1.24+)
+
+Use the `tool` directive to keep `qtlint` versioned in your module graph for reproducible runs without a separate install step (same pattern used by `swag`).
+
+```go
+// go.mod
+tool github.com/go-extras/qtlint/cmd/qtlint
+```
+
+```bash
+# Pin a specific version once
+go get -tool github.com/go-extras/qtlint/cmd/qtlint@vX.Y.Z
+
+# Invoke from anywhere in the module
+go tool qtlint ./...
+go tool qtlint -fix ./...
+```
+
 ## Usage
 
 ### Standalone Mode
