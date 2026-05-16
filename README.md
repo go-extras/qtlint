@@ -27,6 +27,10 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `strings.Contains(x, y), qt.IsFalse` and suggesting `x, qt.Not(qt.Contains), y`
 - Detecting `slices.Contains(x, y), qt.IsTrue` and suggesting `x, qt.Contains, y`
 - Detecting `slices.Contains(x, y), qt.IsFalse` and suggesting `x, qt.Not(qt.Contains), y`
+- Detecting `errors.Is(err, target), qt.IsTrue` and suggesting `err, qt.ErrorIs, target`
+- Detecting `errors.Is(err, target), qt.IsFalse` and suggesting `err, qt.Not(qt.ErrorIs), target`
+- Detecting `errors.As(err, &target), qt.IsTrue` and suggesting `err, qt.ErrorAs, &target`
+- Detecting `errors.As(err, &target), qt.IsFalse` and suggesting `err, qt.Not(qt.ErrorAs), &target`
 - Detecting `if err != nil { t.Fatal[f](...) }` and suggesting `c.Assert(err, qt.IsNil, qt.Commentf(...))`
 - Detecting `if err != nil { t.Error[f](...) }` and suggesting `c.Check(err, qt.IsNil, qt.Commentf(...))`
 
@@ -109,7 +113,7 @@ golangci-lint run --fix
 
 ## Rules
 
-Most rules support **automatic fixing** with the `-fix` flag. The `if err != nil` rules (7 and 8) report diagnostics only — no automatic fix is provided.
+Most rules support **automatic fixing** with the `-fix` flag. The `if err != nil` rules (9 and 10) report diagnostics only — no automatic fix is provided.
 
 ### 1. Use `qt.IsNotNil` instead of `qt.Not(qt.IsNil)`
 
@@ -290,7 +294,37 @@ qtlint: use qt.Contains instead of slices.Contains(x, y), qt.IsTrue
 qtlint: use qt.Not(qt.Contains) instead of slices.Contains(x, y), qt.IsFalse
 ```
 
-### 8. Use `c.Assert(err, qt.IsNil)` instead of `if err != nil { t.Fatal[f](...) }`
+### 8. Use `qt.ErrorIs` / `qt.ErrorAs` instead of `errors.Is(...)` / `errors.As(...)` with `qt.IsTrue` / `qt.IsFalse`
+
+The quicktest library provides `qt.ErrorIs` and `qt.ErrorAs` as direct checkers for `errors.Is` and `errors.As`. Wrapping those calls in `qt.IsTrue`/`qt.IsFalse` hides the intent and produces less informative failure messages.
+
+**Bad:**
+```go
+c.Assert(errors.Is(err, services.ErrClosedLoanFieldImmutable), qt.IsTrue)
+qt.Assert(t, errors.Is(err, fs.ErrNotExist), qt.IsFalse)
+c.Assert(errors.As(err, &target), qt.IsTrue)
+qt.Assert(t, errors.As(err, &target), qt.IsFalse)
+```
+
+**Good:**
+```go
+c.Assert(err, qt.ErrorIs, services.ErrClosedLoanFieldImmutable)
+qt.Assert(t, err, qt.Not(qt.ErrorIs), fs.ErrNotExist)
+c.Assert(err, qt.ErrorAs, &target)
+qt.Assert(t, err, qt.Not(qt.ErrorAs), &target)
+```
+
+**Auto-fix:** ✅ Automatically replaces `errors.Is(err, target), qt.IsTrue` with `err, qt.ErrorIs, target` (and the `qt.IsFalse` / `errors.As` variants in the same way)
+
+**Error messages:**
+```
+qtlint: use qt.ErrorIs instead of errors.Is(err, target), qt.IsTrue
+qtlint: use qt.Not(qt.ErrorIs) instead of errors.Is(err, target), qt.IsFalse
+qtlint: use qt.ErrorAs instead of errors.As(err, target), qt.IsTrue
+qtlint: use qt.Not(qt.ErrorAs) instead of errors.As(err, target), qt.IsFalse
+```
+
+### 9. Use `c.Assert(err, qt.IsNil)` instead of `if err != nil { t.Fatal[f](...) }`
 
 When a `*qt.C` variable and a quicktest import are in scope, the pattern `if err != nil { t.Fatal(...) }` should be replaced with a `c.Assert` call.
 
@@ -318,9 +352,9 @@ qtlint: use c.Assert(err, qt.IsNil) instead of t.Fatal(...)
 qtlint: use c.Assert(err, qt.IsNil, qt.Commentf(...)) instead of t.Fatalf(...)
 ```
 
-### 9. Use `c.Check(err, qt.IsNil)` instead of `if err != nil { t.Error[f](...) }`
+### 10. Use `c.Check(err, qt.IsNil)` instead of `if err != nil { t.Error[f](...) }`
 
-Same as rule 7, but for `t.Error`/`t.Errorf` which maps to `c.Check` (non-fatal assertion).
+Same as rule 9, but for `t.Error`/`t.Errorf` which maps to `c.Check` (non-fatal assertion).
 
 **Bad:**
 ```go

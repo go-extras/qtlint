@@ -55,4 +55,14 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "aliascontains")
 	})
+
+	t.Run("errors.Is and errors.As patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "erroris")
+	})
+
+	t.Run("errors.Is and errors.As patterns with package aliases", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "aliaserrors")
+	})
 }

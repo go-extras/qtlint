@@ -1,0 +1,34 @@
+package aliaserrorsfix
+
+import (
+	"testing"
+
+	myerrors "errors"
+
+	qt "github.com/frankban/quicktest"
+)
+
+var ErrSentinel = myerrors.New("sentinel")
+
+type customErr struct{ msg string }
+
+func (e *customErr) Error() string { return e.msg }
+
+// Test case: errors.Is with alias.
+func TestErrorsIsWithAlias(t *testing.T) {
+	c := qt.New(t)
+	err := ErrSentinel
+
+	qt.Assert(t, err, qt.ErrorIs, ErrSentinel)     // want "qtlint: use qt.ErrorIs instead of myerrors.Is\\(err, target\\), qt.IsTrue"
+	c.Assert(err, qt.Not(qt.ErrorIs), ErrSentinel) // want "qtlint: use qt.Not\\(qt.ErrorIs\\) instead of myerrors.Is\\(err, target\\), qt.IsFalse"
+}
+
+// Test case: errors.As with alias.
+func TestErrorsAsWithAlias(t *testing.T) {
+	c := qt.New(t)
+	err := ErrSentinel
+	var ce *customErr
+
+	qt.Assert(t, err, qt.ErrorAs, &ce)     // want "qtlint: use qt.ErrorAs instead of myerrors.As\\(err, target\\), qt.IsTrue"
+	c.Assert(err, qt.Not(qt.ErrorAs), &ce) // want "qtlint: use qt.Not\\(qt.ErrorAs\\) instead of myerrors.As\\(err, target\\), qt.IsFalse"
+}
