@@ -33,6 +33,8 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
+	"strconv"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -40,17 +42,29 @@ import (
 )
 
 // analyzer is the receiver for analysis pass methods.
-type analyzer struct{}
+type analyzer struct {
+	// onlyStableFixes, when true, strips SuggestedFix from diagnostics whose
+	// rewrite is best-effort and may change runtime semantics or output
+	// formatting (e.g. synthesizing qt.Commentf for a multi-arg t.Fatal whose
+	// args were joined by t.Fatal's Sprintln). The diagnostic is still
+	// reported; only the auto-applicable fix is withheld.
+	onlyStableFixes bool
+}
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
 func NewAnalyzer() *analysis.Analyzer {
 	a := &analyzer{}
-	return &analysis.Analyzer{
+	aa := &analysis.Analyzer{
 		Name:     "qtlint",
 		Doc:      "enforces best practices for quicktest usage",
 		Run:      a.run,
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
 	}
+	aa.Flags.BoolVar(&a.onlyStableFixes, "only-stable-fixes", false,
+		"emit SuggestedFix only for diagnostics whose rewrite is reliable; "+
+			"best-effort fixes (e.g. errnil-fatal with non-literal format or "+
+			"multi-arg non-formatted call) are reported without an auto-fix")
+	return aa
 }
 
 // Analyzer is the qtlint analyzer that enforces best practices
@@ -1141,7 +1155,7 @@ func errMismatch(pass *analysis.Pass, errExpr ast.Expr, call *ast.CallExpr) bool
 	return false
 }
 
-func (*analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
+func (a *analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt) {
 	m, ok := matchErrNilFatal(pass, ifStmt)
 	if !ok {
 		return
@@ -1182,9 +1196,147 @@ func (*analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfStmt
 		shortAssertText = fmt.Sprintf("%s.%s(%s, %s.IsNil, %s.Commentf(...))", cVar, m.qtMethod, errText, qtAlias, qtAlias)
 	}
 
-	pass.Report(analysis.Diagnostic{
+	diag := analysis.Diagnostic{
 		Pos:     ifStmt.Pos(),
 		End:     ifStmt.End(),
 		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
-	})
+	}
+
+	if fix, ok := a.buildErrNilFatalFix(pass, ifStmt, m, cVar, qtAlias, errText); ok {
+		if fix.stable || !a.onlyStableFixes {
+			diag.SuggestedFixes = []analysis.SuggestedFix{{
+				Message: fix.message,
+				TextEdits: []analysis.TextEdit{{
+					Pos:     ifStmt.Pos(),
+					End:     ifStmt.End(),
+					NewText: []byte(fix.text),
+				}},
+			}}
+		}
+	}
+
+	pass.Report(diag)
+}
+
+// errNilFatalFix describes a single-statement rewrite for the
+// `if err != nil { t.Fatal[f]/t.Error[f](...) }` pattern.
+type errNilFatalFix struct {
+	// text is the replacement source for the entire ifStmt span. It is a
+	// single line of code (no indentation prefix, no trailing newline);
+	// the surrounding whitespace in the file is preserved by the TextEdit.
+	text string
+	// message is shown to users in IDE/golangci-lint when offering the fix.
+	message string
+	// stable is true when the rewrite preserves the original call's
+	// semantics exactly (modulo the trailing newline that t.Fatal's Sprintln
+	// added). Unstable fixes synthesize a format string or wrap a
+	// non-error argument and are skipped under -only-stable-fixes.
+	stable bool
+}
+
+// buildErrNilFatalFix returns a rewrite for the if-err-fatal pattern, or
+// ok=false when we cannot safely produce one (init-stmt scoping or spread args).
+func (a *analyzer) buildErrNilFatalFix(
+	pass *analysis.Pass,
+	ifStmt *ast.IfStmt,
+	m errNilFatalMatch,
+	cVar, qtAlias, errText string,
+) (errNilFatalFix, bool) {
+	// `if err := f(); err != nil { ... }` would require pulling the init
+	// statement out, which changes scoping (err leaks into the enclosing
+	// block). Refuse the fix and let the diagnostic stand on its own.
+	if ifStmt.Init != nil {
+		return errNilFatalFix{}, false
+	}
+	// `t.Fatal(args...)` (spread): we cannot enumerate the underlying
+	// arguments at lint time, so any rewrite would silently drop them.
+	if m.call.Ellipsis != token.NoPos {
+		return errNilFatalFix{}, false
+	}
+
+	bare := fmt.Sprintf("%s.%s(%s, %s.IsNil)", cVar, m.qtMethod, errText, qtAlias)
+	withComment := func(commentArgs string) string {
+		return fmt.Sprintf("%s.%s(%s, %s.IsNil, %s.Commentf(%s))",
+			cVar, m.qtMethod, errText, qtAlias, qtAlias, commentArgs)
+	}
+
+	isFmtVariant := m.methodName == "Fatalf" || m.methodName == "Errorf"
+
+	if isFmtVariant {
+		// Fatalf/Errorf require a format argument; defensively refuse if absent.
+		if len(m.call.Args) == 0 {
+			return errNilFatalFix{}, false
+		}
+		argTexts, ok := formatArgs(pass, m.call.Args)
+		if !ok {
+			return errNilFatalFix{}, false
+		}
+		_, formatIsLiteral := m.call.Args[0].(*ast.BasicLit)
+		return errNilFatalFix{
+			text:    withComment(strings.Join(argTexts, ", ")),
+			message: fmt.Sprintf("Replace with %s.%s(..., qt.Commentf(...))", cVar, m.qtMethod),
+			// A literal format string round-trips through fmt.Sprintf inside
+			// Commentf identically. A non-literal could be anything (a const
+			// alias, a function call), so we mark the rewrite unstable.
+			stable: formatIsLiteral,
+		}, true
+	}
+
+	// Non-formatted Fatal/Error: zero args is a clean rewrite to bare assert.
+	if len(m.call.Args) == 0 {
+		return errNilFatalFix{
+			text:    bare,
+			message: fmt.Sprintf("Replace with %s.%s(%s, %s.IsNil)", cVar, m.qtMethod, errText, qtAlias),
+			stable:  true,
+		}, true
+	}
+
+	// Single arg: when it's the same err identifier, drop it entirely (clean).
+	// Otherwise wrap it via qt.Commentf("%v", arg) — semantically close to
+	// t.Fatal's Sprintln output but loses the trailing newline, so unstable.
+	if len(m.call.Args) == 1 {
+		argText, ok := formatExpr(pass, m.call.Args[0])
+		if !ok {
+			return errNilFatalFix{}, false
+		}
+		if argText == errText {
+			return errNilFatalFix{
+				text:    bare,
+				message: fmt.Sprintf("Replace with %s.%s(%s, %s.IsNil)", cVar, m.qtMethod, errText, qtAlias),
+				stable:  true,
+			}, true
+		}
+		return errNilFatalFix{
+			text:    withComment(`"%v", ` + argText),
+			message: fmt.Sprintf("Replace with %s.%s(..., qt.Commentf(\"%%v\", ...))", cVar, m.qtMethod),
+			stable:  false,
+		}, true
+	}
+
+	// Multi-arg non-formatted: approximate Sprintln join with "%v %v ..." in Commentf.
+	argTexts, ok := formatArgs(pass, m.call.Args)
+	if !ok {
+		return errNilFatalFix{}, false
+	}
+	placeholders := strings.TrimRight(strings.Repeat("%v ", len(m.call.Args)), " ")
+	commentArgs := strconv.Quote(placeholders) + ", " + strings.Join(argTexts, ", ")
+	return errNilFatalFix{
+		text:    withComment(commentArgs),
+		message: fmt.Sprintf("Replace with %s.%s(..., qt.Commentf(\"%%v ...\", ...))", cVar, m.qtMethod),
+		stable:  false,
+	}, true
+}
+
+// formatArgs formats a slice of AST expressions, returning ok=false if any
+// expression cannot be rendered (e.g. token positions out of range).
+func formatArgs(pass *analysis.Pass, exprs []ast.Expr) ([]string, bool) {
+	out := make([]string, 0, len(exprs))
+	for _, e := range exprs {
+		s, ok := formatExpr(pass, e)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
 }
