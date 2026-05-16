@@ -16,6 +16,10 @@
 //   - strings.Contains(x, y), qt.IsFalse which should be replaced with x, qt.Not(qt.Contains), y
 //   - slices.Contains(x, y), qt.IsTrue which should be replaced with x, qt.Contains, y
 //   - slices.Contains(x, y), qt.IsFalse which should be replaced with x, qt.Not(qt.Contains), y
+//   - errors.Is(err, target), qt.IsTrue which should be replaced with err, qt.ErrorIs, target
+//   - errors.Is(err, target), qt.IsFalse which should be replaced with err, qt.Not(qt.ErrorIs), target
+//   - errors.As(err, &target), qt.IsTrue which should be replaced with err, qt.ErrorAs, &target
+//   - errors.As(err, &target), qt.IsFalse which should be replaced with err, qt.Not(qt.ErrorAs), &target
 //   - if err != nil { t.Fatal[f](...) } which should be replaced with c.Assert(err, qt.IsNil, qt.Commentf(...))
 //   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
 //
@@ -114,6 +118,9 @@ func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 
 	// Check for strings.Contains(x, y) or slices.Contains(x, y) with qt.IsTrue/qt.IsFalse pattern
 	checkContainsPattern(pass, call)
+
+	// Check for errors.Is(err, target) or errors.As(err, &target) with qt.IsTrue/qt.IsFalse pattern.
+	checkErrorIsAsPattern(pass, call)
 }
 
 // getCheckerArg extracts the checker argument from a quicktest assertion call.
@@ -792,6 +799,140 @@ func checkContainsPattern(pass *analysis.Pass, call *ast.CallExpr) {
 		},
 	}
 	pass.Report(diagnostic)
+}
+
+// checkErrorIsAsPattern checks if the pattern is errors.Is(err, target) or
+// errors.As(err, &target) with qt.IsTrue or qt.IsFalse and suggests using
+// qt.ErrorIs / qt.ErrorAs (or their negations via qt.Not).
+func checkErrorIsAsPattern(pass *analysis.Pass, call *ast.CallExpr) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	// Determine the position of the "got" argument based on whether it's
+	// qt.Assert(t, got, checker, ...) or c.Assert(got, checker, ...).
+	gotArgIndex := 0
+	if isPackageQualified(pass, sel) {
+		gotArgIndex = 1
+	}
+
+	if len(call.Args) < gotArgIndex+2 {
+		return
+	}
+
+	gotArg := call.Args[gotArgIndex]
+	checkerArg := call.Args[gotArgIndex+1]
+
+	// gotArg must be a call to errors.Is or errors.As.
+	fnCall, ok := gotArg.(*ast.CallExpr)
+	if !ok {
+		return
+	}
+
+	fnSel, ok := fnCall.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	var newCheckerName string
+	switch fnSel.Sel.Name {
+	case "Is":
+		newCheckerName = "ErrorIs"
+	case "As":
+		newCheckerName = "ErrorAs"
+	default:
+		return
+	}
+
+	// Verify the receiver refers to the standard "errors" package.
+	pkgIdent, ok := fnSel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+	obj := pass.TypesInfo.Uses[pkgIdent]
+	if obj == nil {
+		return
+	}
+	pkgName, ok := obj.(*types.PkgName)
+	if !ok {
+		return
+	}
+	if pkgName.Imported().Path() != "errors" {
+		return
+	}
+
+	// errors.Is/As take exactly two arguments.
+	if len(fnCall.Args) != 2 {
+		return
+	}
+
+	// The checker must be qt.IsTrue or qt.IsFalse.
+	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	checkerName := checkerSel.Sel.Name
+	if checkerName != "IsTrue" && checkerName != "IsFalse" {
+		return
+	}
+	if !isPackageQualified(pass, checkerSel) {
+		return
+	}
+	qtPkgIdent, ok := checkerSel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+
+	firstText, ok := formatExpr(pass, fnCall.Args[0])
+	if !ok {
+		return
+	}
+	secondText, ok := formatExpr(pass, fnCall.Args[1])
+	if !ok {
+		return
+	}
+
+	// errors.Is/As(...), qt.IsTrue  -> err, qt.ErrorIs/ErrorAs, target
+	// errors.Is/As(...), qt.IsFalse -> err, qt.Not(qt.ErrorIs/ErrorAs), target
+	usePositive := checkerName == "IsTrue"
+	pkgNameStr := pkgIdent.Name // e.g., "errors" or an alias
+
+	var newCheckerText, message, fixMessage string
+	if usePositive {
+		newCheckerText = qtPkgIdent.Name + "." + newCheckerName + ", " + secondText
+		message = fmt.Sprintf("qtlint: use qt.%s instead of %s.%s(err, target), qt.IsTrue",
+			newCheckerName, pkgNameStr, fnSel.Sel.Name)
+		fixMessage = fmt.Sprintf("Replace with qt.%s", newCheckerName)
+	} else {
+		newCheckerText = qtPkgIdent.Name + ".Not(" + qtPkgIdent.Name + "." + newCheckerName + "), " + secondText
+		message = fmt.Sprintf("qtlint: use qt.Not(qt.%s) instead of %s.%s(err, target), qt.IsFalse",
+			newCheckerName, pkgNameStr, fnSel.Sel.Name)
+		fixMessage = fmt.Sprintf("Replace with qt.Not(qt.%s)", newCheckerName)
+	}
+
+	pass.Report(analysis.Diagnostic{
+		Pos:     gotArg.Pos(),
+		End:     checkerArg.End(),
+		Message: message,
+		SuggestedFixes: []analysis.SuggestedFix{
+			{
+				Message: fixMessage,
+				TextEdits: []analysis.TextEdit{
+					{
+						Pos:     gotArg.Pos(),
+						End:     gotArg.End(),
+						NewText: []byte(firstText),
+					},
+					{
+						Pos:     checkerArg.Pos(),
+						End:     checkerArg.End(),
+						NewText: []byte(newCheckerText),
+					},
+				},
+			},
+		},
+	})
 }
 
 func stripParens(expr ast.Expr) ast.Expr {

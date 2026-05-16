@@ -51,6 +51,8 @@ var (
 	Equals     Checker
 	DeepEquals Checker
 	HasLen     Checker
+	ErrorIs    Checker
+	ErrorAs    Checker
 )
 
 // Not returns a Checker negating the given Checker.
