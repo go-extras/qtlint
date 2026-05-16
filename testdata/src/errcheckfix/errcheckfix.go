@@ -35,6 +35,18 @@ func TestStableError(t *testing.T) {
 	c.Assert(1, qt.Equals, 1)
 }
 
+// Stable: zero-arg Fatal collapses to a bare c.Assert.
+func TestStableFatalNoArgs(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	if err != nil { // want "qtlint: use c.Assert.*instead of t.Fatal"
+		t.Fatal()
+	}
+
+	c.Assert(1, qt.Equals, 1)
+}
+
 // Stable: Fatalf with a literal format string maps directly to qt.Commentf.
 func TestStableFatalfLiteral(t *testing.T) {
 	c := qt.New(t)

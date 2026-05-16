@@ -1306,6 +1306,11 @@ func buildErrNilFatalFix(
 				stable:  true,
 			}, true
 		}
+		// Marked unstable to stay consistent with the multi-arg synthesis below:
+		// both wrap arguments in a synthesized Commentf format and both drop the
+		// trailing newline that Sprintln would have produced. The format is
+		// fixed ("%v") so user-supplied "%" characters in arg pass through
+		// verbatim — there is no format-string injection risk here.
 		return errNilFatalFix{
 			text:    withComment(`"%v", ` + argText),
 			message: fmt.Sprintf("Replace with %s.%s(..., qt.Commentf(\"%%v\", ...))", cVar, m.qtMethod),
@@ -1313,7 +1318,17 @@ func buildErrNilFatalFix(
 		}, true
 	}
 
-	// Multi-arg non-formatted: approximate Sprintln join with "%v %v ..." in Commentf.
+	// Multi-arg non-formatted: approximate Sprintln join with "%v %v ..." in
+	// Commentf.
+	//
+	// Behavioral gap to be aware of: t.Fatal(a, b, c) uses fmt.Sprintln which
+	// joins args with spaces *and appends \n*; qt.Commentf("%v %v %v", a, b, c)
+	// uses fmt.Sprintf which honors the format string and produces no trailing
+	// newline. We do not reproduce the newline because qt.Commentf is lazy —
+	// it's only formatted on assertion failure and most consumers will not
+	// notice the trailing newline either way. This is the canonical reason
+	// this branch's fix is classified unstable: the failure-message text is
+	// nearly but not exactly identical to the original t.Fatal output.
 	argTexts, ok := formatArgs(pass, m.call.Args)
 	if !ok {
 		return errNilFatalFix{}, false
