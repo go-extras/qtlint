@@ -1,0 +1,120 @@
+package errcheckfix
+
+import (
+	"errors"
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+)
+
+func returnsErr() error {
+	return errors.New("boom")
+}
+
+// Stable: single-err Fatal collapses to a bare c.Assert.
+func TestStableFatal(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	c.Assert(err, qt.IsNil)
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// Stable: single-err Error collapses to a bare c.Check.
+func TestStableError(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	c.Check(err, qt.IsNil)
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// Stable: zero-arg Fatal collapses to a bare c.Assert.
+func TestStableFatalNoArgs(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	c.Assert(err, qt.IsNil)
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// Stable: Fatalf with a literal format string maps directly to qt.Commentf.
+func TestStableFatalfLiteral(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	c.Assert(err, qt.IsNil, qt.Commentf("unexpected: %v", err))
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// Stable: Errorf with a literal format string maps directly to qt.Commentf.
+func TestStableErrorfLiteral(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	c.Check(err, qt.IsNil, qt.Commentf("unexpected: %v", err))
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// Unstable: multi-arg non-formatted Fatal — Sprintln output is approximated
+// by a synthesized "%v %v %v" format.
+func TestUnstableMultiArgFatal(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	c.Assert(err, qt.IsNil, qt.Commentf("%v %v %v", "unexpected:", err, 123))
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// Unstable: single non-err arg is wrapped via qt.Commentf("%v", ...).
+func TestUnstableSingleNonErrArg(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	c.Check(err, qt.IsNil, qt.Commentf("%v", "standalone message"))
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// Unstable: format string is a variable — we cannot tell at lint time
+// whether it round-trips identically through qt.Commentf.
+func TestUnstableNonLiteralFormat(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	fmtStr := "got: %v"
+	c.Assert(err, qt.IsNil, qt.Commentf(fmtStr, err))
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// No fix: pulling the init statement out would change scoping. The diagnostic
+// still fires so the user knows about the pattern.
+func TestNoFixInitStmt(t *testing.T) {
+	c := qt.New(t)
+
+	if err := returnsErr(); err != nil { // want "qtlint: use c.Assert.*instead of t.Fatal"
+		t.Fatal(err)
+	}
+
+	c.Assert(1, qt.Equals, 1)
+}
+
+// No fix: spread args are opaque — we cannot enumerate the underlying values.
+func TestNoFixSpread(t *testing.T) {
+	c := qt.New(t)
+
+	err := returnsErr()
+	args := []any{err, 123}
+	if err != nil { // want "qtlint: use c.Assert.*instead of t.Fatalf"
+		t.Fatalf("got: %v %v", args...)
+	}
+
+	c.Assert(1, qt.Equals, 1)
+}

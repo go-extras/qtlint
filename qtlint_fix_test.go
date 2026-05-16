@@ -18,4 +18,19 @@ func TestFixes(t *testing.T) {
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "aliascontainsfix")
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "errorisfix")
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "aliaserrorsfix")
+
+	// Default behavior: stable AND unstable errnil-fatal fixes apply.
+	t.Run("errcheckfix default applies all", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "errcheckfix")
+	})
+
+	// With --only-stable-fixes: unstable fixes are withheld; diagnostics still fire.
+	t.Run("errcheckfix only-stable-fixes", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		if err := analyzer.Flags.Set("only-stable-fixes", "true"); err != nil {
+			t.Fatalf("set flag: %v", err)
+		}
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "errcheckonlystable")
+	})
 }

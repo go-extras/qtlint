@@ -93,6 +93,9 @@ qtlint -fix ./...
 
 # Show diff without applying fixes
 qtlint -fix -diff ./...
+
+# Only apply fixes the linter is confident about (skip best-effort rewrites)
+qtlint -fix -only-stable-fixes ./...
 ```
 
 ### With golangci-lint
@@ -111,9 +114,15 @@ Then run with auto-fix:
 golangci-lint run --fix
 ```
 
+### `-only-stable-fixes` flag
+
+Some rewrites have a clear, semantically equivalent target (e.g. `qt.Not(qt.IsNil)` → `qt.IsNotNil`). Others are best-effort: rules 9 and 10 (`if err != nil { t.Fatal/Error[f](...) }`) sometimes synthesize a `qt.Commentf` from arguments that were originally joined by `Sprintln`, or pass through a format string that the linter cannot prove is a string literal. Such rewrites usually do the right thing but may change the failure-message text.
+
+Pass `-only-stable-fixes` to withhold auto-fixes for those uncertain cases. The diagnostic still fires so you can review and apply the change by hand; only the auto-applicable fix is held back. All other rules continue to provide fixes as before.
+
 ## Rules
 
-Most rules support **automatic fixing** with the `-fix` flag. The `if err != nil` rules (9 and 10) report diagnostics only — no automatic fix is provided.
+All rules support **automatic fixing** with the `-fix` flag. For rules 9 and 10 the rewrite is best-effort in some variants (multi-arg `t.Fatal`, non-literal format string, `if`-init statement, spread arguments); the unsafe-by-default variants are still emitted as fixes but can be skipped with `-only-stable-fixes`. Cases that cannot be rewritten at all (init-statement and spread args) remain report-only.
 
 ### 1. Use `qt.IsNotNil` instead of `qt.Not(qt.IsNil)`
 
@@ -344,7 +353,7 @@ c.Assert(err, qt.IsNil)
 c.Assert(err, qt.IsNil, qt.Commentf("unexpected error: %v", err))
 ```
 
-**Auto-fix:** ❌ No automatic fix available
+**Auto-fix:** ✅ for `t.Fatal(err)`, `t.Fatal()`, and `t.Fatalf(literal, …)` with a string-literal format. Best-effort (suppressed by `-only-stable-fixes`) for `t.Fatal("msg:", err, 123)` (multi-arg; format is synthesized as `"%v %v %v"`) and `t.Fatalf(formatVar, …)` (non-literal format). Not provided for `if err := f(); err != nil { t.Fatal(…) }` (init statement would change scoping) or for `t.Fatal(args...)` (spread arguments are opaque).
 
 **Error message:**
 ```
@@ -372,7 +381,7 @@ c.Check(err, qt.IsNil)
 c.Check(err, qt.IsNil, qt.Commentf("unexpected error: %v", err))
 ```
 
-**Auto-fix:** ❌ No automatic fix available
+**Auto-fix:** Same stability matrix as rule 9 (above), targeting `c.Check` instead of `c.Assert`.
 
 **Error message:**
 ```
