@@ -1202,7 +1202,7 @@ func (a *analyzer) checkErrNilFatalPattern(pass *analysis.Pass, ifStmt *ast.IfSt
 		Message: fmt.Sprintf("qtlint: use %s instead of %s.%s(...)", shortAssertText, receiverText, m.methodName),
 	}
 
-	if fix, ok := a.buildErrNilFatalFix(pass, ifStmt, m, cVar, qtAlias, errText); ok {
+	if fix, ok := buildErrNilFatalFix(pass, ifStmt, m, cVar, qtAlias, errText); ok {
 		if fix.stable || !a.onlyStableFixes {
 			diag.SuggestedFixes = []analysis.SuggestedFix{{
 				Message: fix.message,
@@ -1236,7 +1236,7 @@ type errNilFatalFix struct {
 
 // buildErrNilFatalFix returns a rewrite for the if-err-fatal pattern, or
 // ok=false when we cannot safely produce one (init-stmt scoping or spread args).
-func (a *analyzer) buildErrNilFatalFix(
+func buildErrNilFatalFix(
 	pass *analysis.Pass,
 	ifStmt *ast.IfStmt,
 	m errNilFatalMatch,
