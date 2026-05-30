@@ -18,6 +18,7 @@ func TestFixes(t *testing.T) {
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "aliascontainsfix")
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "errorisfix")
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "aliaserrorsfix")
+	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "equalsnilfix")
 
 	// Default behavior: stable AND unstable errnil-fatal fixes apply.
 	t.Run("errcheckfix default applies all", func(t *testing.T) {

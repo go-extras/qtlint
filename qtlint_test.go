@@ -65,4 +65,9 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "aliaserrors")
 	})
+
+	t.Run("qt.Equals with nil patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "equalsnil")
+	})
 }

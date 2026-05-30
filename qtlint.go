@@ -22,6 +22,7 @@
 //   - errors.As(err, &target), qt.IsFalse which should be replaced with err, qt.Not(qt.ErrorAs), &target
 //   - if err != nil { t.Fatal[f](...) } which should be replaced with c.Assert(err, qt.IsNil, qt.Commentf(...))
 //   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
+//   - x, qt.Equals, nil which should be replaced with x, qt.IsNil
 //
 // This linter is designed to be used as a custom linter for golangci-lint.
 package qtlint
@@ -135,6 +136,80 @@ func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 
 	// Check for errors.Is(err, target) or errors.As(err, &target) with qt.IsTrue/qt.IsFalse pattern.
 	checkErrorIsAsPattern(pass, call)
+
+	// Check for x, qt.Equals, nil pattern.
+	checkEqualsNilPattern(pass, call)
+}
+
+// checkEqualsNilPattern checks if the pattern is x, qt.Equals, nil and suggests
+// using x, qt.IsNil instead. The quicktest Equals checker compares got and want
+// with ==, so a typed nil (e.g. (*T)(nil)) never equals the untyped nil literal;
+// only an untyped nil interface happens to pass. The qt.IsNil checker is the
+// correct way to check for nil, as documented by quicktest itself.
+func checkEqualsNilPattern(pass *analysis.Pass, call *ast.CallExpr) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+
+	// Determine the position of the "got" argument based on whether it's
+	// qt.Assert(t, got, checker, want, ...) or c.Assert(got, checker, want, ...).
+	gotArgIndex := 0
+	if isPackageQualified(pass, sel) {
+		gotArgIndex = 1
+	}
+
+	checkerIndex := gotArgIndex + 1
+	wantIndex := gotArgIndex + 2
+
+	// Need at least got, checker, and want arguments.
+	if len(call.Args) < wantIndex+1 {
+		return
+	}
+
+	checkerArg := call.Args[checkerIndex]
+	wantArg := call.Args[wantIndex]
+
+	// The checker must be qt.Equals.
+	checkerSel, ok := checkerArg.(*ast.SelectorExpr)
+	if !ok || checkerSel.Sel.Name != "Equals" {
+		return
+	}
+	if !isPackageQualified(pass, checkerSel) {
+		return
+	}
+
+	// The want argument must be the nil identifier.
+	if !isNilIdent(wantArg) {
+		return
+	}
+
+	pkgIdent, ok := checkerSel.X.(*ast.Ident)
+	if !ok {
+		return
+	}
+
+	// Replace the "qt.Equals, nil" span with "qt.IsNil", dropping the want
+	// argument. Any trailing arguments (e.g. qt.Commentf(...)) are preserved.
+	newText := pkgIdent.Name + ".IsNil"
+
+	pass.Report(analysis.Diagnostic{
+		Pos:     checkerArg.Pos(),
+		End:     wantArg.End(),
+		Message: "qtlint: use qt.IsNil instead of qt.Equals, nil",
+		SuggestedFixes: []analysis.SuggestedFix{
+			{
+				Message: "Replace with qt.IsNil",
+				TextEdits: []analysis.TextEdit{
+					{
+						Pos:     checkerArg.Pos(),
+						End:     wantArg.End(),
+						NewText: []byte(newText),
+					},
+				},
+			},
+		},
+	})
 }
 
 // getCheckerArg extracts the checker argument from a quicktest assertion call.
