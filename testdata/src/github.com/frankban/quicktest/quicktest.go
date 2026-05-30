@@ -59,3 +59,11 @@ var (
 func Not(checker Checker) Checker {
 	return nil
 }
+
+// Comment is a comment associated with an assertion.
+type Comment struct{}
+
+// Commentf returns a Comment with the given formatted message.
+func Commentf(format string, args ...interface{}) Comment {
+	return Comment{}
+}

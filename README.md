@@ -33,6 +33,7 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `errors.As(err, &target), qt.IsFalse` and suggesting `err, qt.Not(qt.ErrorAs), &target`
 - Detecting `if err != nil { t.Fatal[f](...) }` and suggesting `c.Assert(err, qt.IsNil, qt.Commentf(...))`
 - Detecting `if err != nil { t.Error[f](...) }` and suggesting `c.Check(err, qt.IsNil, qt.Commentf(...))`
+- Detecting `x, qt.Equals, nil` and suggesting `x, qt.IsNil`
 
 This ensures that tests use the most direct and readable checker available.
 
@@ -387,6 +388,29 @@ c.Check(err, qt.IsNil, qt.Commentf("unexpected error: %v", err))
 ```
 qtlint: use c.Check(err, qt.IsNil) instead of t.Error(...)
 qtlint: use c.Check(err, qt.IsNil, qt.Commentf(...)) instead of t.Errorf(...)
+```
+
+### 11. Use `qt.IsNil` instead of `qt.Equals, nil`
+
+The quicktest `Equals` checker compares `got` and `want` with `==`. A typed nil (e.g. `(*T)(nil)`) never equals the untyped `nil` literal, so `c.Assert((*T)(nil), qt.Equals, nil)` fails at runtime; only an untyped nil interface happens to pass. quicktest's own documentation recommends `qt.IsNil` for nil checks.
+
+**Bad:**
+```go
+c.Assert(x, qt.Equals, nil)
+qt.Assert(t, x, qt.Equals, nil)
+```
+
+**Good:**
+```go
+c.Assert(x, qt.IsNil)
+qt.Assert(t, x, qt.IsNil)
+```
+
+**Auto-fix:** ✅ Automatically replaces `qt.Equals, nil` with `qt.IsNil`, dropping the `want` argument. Trailing arguments such as `qt.Commentf(...)` are preserved.
+
+**Error message:**
+```
+qtlint: use qt.IsNil instead of qt.Equals, nil
 ```
 
 ## Examples
