@@ -1,6 +1,10 @@
 package qtlint_test
 
 import (
+	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/analysis"
@@ -95,6 +99,47 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "testingrunoff")
 	})
+
+	// Both opt-in rules at once, which no other test turns on together, plus a
+	// default-set diagnostic between them. The want comments cover the
+	// combined path; the order assertion covers what the want comments cannot,
+	// since analysistest matches each want by position and never looks at the
+	// sequence the diagnostics arrived in.
+	t.Run("both opt-in rules", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-qt-c-receiver")
+		setFlag(t, analyzer, "require-testing-run")
+		results := analysistest.Run(t, testdata, analyzer, "bothrules")
+		assertReportedOrder(t, results, []string{
+			"bothrules.go:29:2: qtlint: use c.Assert(...) instead of qt.Assert(t, ...)",
+			"bothrules.go:31:2: qtlint: use t.Run with a per-subtest qt.New instead of c.Run",
+			"bothrules.go:32:12: qtlint: use qt.HasLen instead of len(x), qt.Equals",
+			"bothrules.go:35:2: qtlint: use c.Check(...) instead of qt.Check(t, ...)",
+		})
+	})
+}
+
+// assertReportedOrder checks the sequence of diagnostics a pass reported,
+// which is the sequence a driver prints: neither singlechecker nor the -json
+// encoder sorts, so the analyzer's report order is the user's read order.
+//
+// The positions are rendered relative to the file's base name so that the
+// expectation reads like the output a user sees.
+func assertReportedOrder(t *testing.T, results []*analysistest.Result, want []string) {
+	t.Helper()
+
+	var got []string
+	for _, res := range results {
+		for _, diag := range res.Diagnostics {
+			posn := res.Pass.Fset.Position(diag.Pos)
+			got = append(got, fmt.Sprintf("%s:%d:%d: %s",
+				filepath.Base(posn.Filename), posn.Line, posn.Column, diag.Message))
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("diagnostics reported out of order:\ngot:\n\t%s\nwant:\n\t%s",
+			strings.Join(got, "\n\t"), strings.Join(want, "\n\t"))
+	}
 }
 
 // setFlag enables a boolean analyzer flag, failing the test if the flag does

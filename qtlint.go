@@ -36,11 +36,13 @@ package qtlint
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"go/ast"
 	"go/format"
 	"go/token"
 	"go/types"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -111,24 +113,66 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		return nil, nil
 	}
 
-	// Filter for nodes we want to inspect.
-	nodeFilter := []ast.Node{
-		(*ast.CallExpr)(nil),
-		(*ast.IfStmt)(nil),
-	}
-
-	insp.Preorder(nodeFilter, func(n ast.Node) {
-		switch n := n.(type) {
-		case *ast.CallExpr:
-			checkQuicktestCall(pass, n)
-		case *ast.IfStmt:
-			a.checkErrNilFatalPattern(pass, n)
+	inSourceOrder(pass, func() {
+		// Filter for nodes we want to inspect.
+		nodeFilter := []ast.Node{
+			(*ast.CallExpr)(nil),
+			(*ast.IfStmt)(nil),
 		}
+
+		insp.Preorder(nodeFilter, func(n ast.Node) {
+			switch n := n.(type) {
+			case *ast.CallExpr:
+				checkQuicktestCall(pass, n)
+			case *ast.IfStmt:
+				a.checkErrNilFatalPattern(pass, n)
+			}
+		})
+
+		a.runOptInRules(pass, insp)
 	})
 
-	a.runOptInRules(pass, insp)
-
 	return nil, nil
+}
+
+// inSourceOrder runs rules with pass.Report buffered and then emits everything
+// they reported ordered by position.
+//
+// The rules do not share one walk. The default set rides a single Preorder,
+// -require-qt-c-receiver needs the enclosing stack and so takes a WithStack of
+// its own, and -require-testing-run plans a whole function at a time and walks
+// the files itself. Reporting as each walk reaches a site therefore orders the
+// output by traversal rather than by position: a diagnostic from a later walk
+// comes after one from an earlier walk however far up the file it sits.
+//
+// No driver puts that right: singlechecker prints diagnostics in the order the
+// analyzer reported them, and so does the -json encoding of them, so what the
+// rules emit is what a reader compares against the file. Sorting here keeps
+// that promise for every pair of rules rather than for the pairs that happen
+// to share a walk today.
+//
+// One cost is worth naming: the driver validates a diagnostic's SuggestedFixes
+// inside pass.Report, so buffering moves that validation from the moment a
+// rule reports to the end of the pass, and a malformed fix panics with the
+// reporting rule no longer on the stack.
+func inSourceOrder(pass *analysis.Pass, rules func()) {
+	direct := pass.Report
+	var collected []analysis.Diagnostic
+
+	pass.Report = func(d analysis.Diagnostic) { collected = append(collected, d) }
+	defer func() {
+		pass.Report = direct
+		// Stable, so that two rules reporting the same position keep the order
+		// the rules ran in rather than swapping between builds.
+		slices.SortStableFunc(collected, func(x, y analysis.Diagnostic) int {
+			return cmp.Compare(x.Pos, y.Pos)
+		})
+		for _, d := range collected {
+			direct(d)
+		}
+	}()
+
+	rules()
 }
 
 // runOptInRules runs the house-style rules that are off unless their flag is
