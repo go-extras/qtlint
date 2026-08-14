@@ -25,11 +25,22 @@ func TestMixed(t *testing.T) {
 
 // Every method in the withheld set, one subtest each. All are reported and
 // none is rewritten under this flag.
+//
+// Chdir and Context are here for the same reason as the rest, and they are the
+// two that reach a *qt.C through the embedded testing.TB rather than through
+// C's own declarations. A stub that does not spell them out is a stub no
+// fixture can use to ask about them.
 func TestWithheldMethods(t *testing.T) {
 	c := qt.New(t)
 
 	c.Run("parallel", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		c.Parallel()
+	})
+	c.Run("chdir", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Chdir("testdata")
+	})
+	c.Run("context", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		_ = c.Context()
 	})
 	c.Run("setenv", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		c.Setenv("K", "V")

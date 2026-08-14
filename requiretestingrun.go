@@ -41,8 +41,18 @@ var deferredCMethods = map[string]bool{
 // closure that calls one so a project can migrate those by hand; the
 // diagnostic still fires. That is a review gate, not a correctness one. The
 // correctness one is deferredCMethods, and it is not optional.
+//
+// Chdir and Context reach a *qt.C through the embedded testing.TB rather than
+// through C's own declarations, which is how they came to be left out: an
+// inventory of what can be called on a *qt.C has to follow the embedding, and
+// testing.TB gains methods with the language — both of these in Go 1.24. By
+// this set's own criterion they belong to it. A working directory and a
+// context last exactly as long as the test, and both bind to the subtest under
+// either spelling, so like the rest of the set they cost only a fix.
 var testScopedCMethods = map[string]bool{
+	"Chdir":    true,
 	"Cleanup":  true,
+	"Context":  true,
 	"Mkdir":    true,
 	"Parallel": true,
 	"Patch":    true,
