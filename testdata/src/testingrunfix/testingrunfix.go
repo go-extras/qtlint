@@ -112,6 +112,27 @@ func TestTestScopedMethod(t *testing.T) {
 	})
 }
 
+// A closure calling Defer is withheld with no flag set. C.Run calls Done on
+// the *qt.C it hands the closure and a bare qt.New(t) does not, so this
+// rewrite would replace a passing test with one that panics with "Done not
+// called after Defer". The receiver's declaration stays, because the c.Run
+// that was left alone still uses it.
+func TestDeferWithheldByDefault(t *testing.T) {
+	c := qt.New(t)
+	c.Run("sub", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Defer(func() {})
+		c.Assert(1, qt.Equals, 1)
+	})
+}
+
+// Done is the other half of the same API and is withheld the same way.
+func TestDoneWithheldByDefault(t *testing.T) {
+	c := qt.New(t)
+	c.Run("sub", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Done()
+	})
+}
+
 // A one-line closure body: the opening brace, the statement and the closing
 // brace share a line, so the rewrite must open a line for the statement it
 // inserts instead of running the two together.

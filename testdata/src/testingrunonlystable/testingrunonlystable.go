@@ -39,11 +39,11 @@ func TestWithheldMethods(t *testing.T) {
 	c.Run("patch", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		c.Patch(nil, nil)
 	})
-	c.Run("defer", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
-		c.Defer(func() {})
+	c.Run("unsetenv", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Unsetenv("K")
 	})
 	c.Run("mkdir", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
-		c.Assert(c.Mkdir("d"), qt.Equals, "d")
+		c.Assert(c.Mkdir(), qt.Not(qt.Equals), "")
 	})
 }
 

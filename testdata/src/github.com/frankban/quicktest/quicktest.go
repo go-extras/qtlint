@@ -1,5 +1,11 @@
 // Package quicktest is a stub for testing purposes.
 // This is not the real quicktest package.
+//
+// The rules that reason about *qt.C methods decide what to do from the method
+// name, so a name this stub gets wrong or leaves out is a case the fixtures
+// cannot reach. Signatures are copied from quicktest v1.14.6; the real C
+// embeds testing.TB and inherits Cleanup, TempDir and the rest from it, which
+// this stub spells out instead.
 package quicktest
 
 import "testing"
@@ -35,9 +41,12 @@ func (c *C) Cleanup(f func()) {}
 // Defer registers f to be called when the test's Done method is called.
 func (c *C) Defer(f func()) {}
 
-// Mkdir creates a directory that is removed when the test is done.
-func (c *C) Mkdir(name string) string {
-	return name
+// Done calls the functions registered by Defer, in reverse order.
+func (c *C) Done() {}
+
+// Mkdir makes a temporary directory and returns its name.
+func (c *C) Mkdir() string {
+	return ""
 }
 
 // Parallel signals that the test is to be run in parallel.
@@ -48,6 +57,9 @@ func (c *C) Patch(dest, value any) {}
 
 // Setenv sets an environment variable for the duration of the test.
 func (c *C) Setenv(key, value string) {}
+
+// Unsetenv unsets an environment variable for the duration of the test.
+func (c *C) Unsetenv(name string) {}
 
 // TempDir returns a temporary directory removed when the test is done.
 func (c *C) TempDir() string {
