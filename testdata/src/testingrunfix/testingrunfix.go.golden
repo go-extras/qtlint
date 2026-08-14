@@ -135,6 +135,24 @@ func TestDoneWithheldByDefault(t *testing.T) {
 	})
 }
 
+// deferSomething reaches Defer through a parameter.
+func deferSomething(c *qt.C) { c.Defer(func() {}) }
+
+// Defer reached indirectly is withheld by default as well, which is the whole
+// point of asking what can be called on the *qt.C rather than what is written
+// next to it. The alias is followed; the helper call is not, and a use that
+// cannot be followed is treated as reaching anything.
+func TestIndirectDeferWithheldByDefault(t *testing.T) {
+	c := qt.New(t)
+	c.Run("alias", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		cc := c
+		cc.Defer(func() {})
+	})
+	c.Run("helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		deferSomething(c)
+	})
+}
+
 // A one-line closure body: the opening brace, the statement and the closing
 // brace share a line, so the rewrite must open a line for the statement it
 // inserts instead of running the two together.

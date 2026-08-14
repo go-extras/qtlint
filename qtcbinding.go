@@ -56,6 +56,29 @@ func outermostFuncs(file *ast.File) []ast.Node {
 	return roots
 }
 
+// inspectWithParent walks the tree rooted at root in depth-first order,
+// calling fn for every node together with the node that contains it. The
+// root's parent is nil.
+//
+// A plain ast.Inspect answers "is this node an identifier"; a rule that has
+// to answer "and what is being done to it" needs the node above.
+func inspectWithParent(root ast.Node, fn func(n, parent ast.Node)) {
+	var stack []ast.Node
+	ast.Inspect(root, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		fn(n, parent)
+		stack = append(stack, n)
+		return true
+	})
+}
+
 // isTestingTPtr reports whether typ is exactly *testing.T.
 //
 // The opt-in rules that rewrite between a *testing.T and a *qt.C insist on

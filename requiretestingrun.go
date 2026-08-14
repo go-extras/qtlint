@@ -251,8 +251,8 @@ func bindingSite(lexParent *runSite, obj types.Object) *runSite {
 // rewrite has not introduced.
 func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
 	for _, s := range p.sites {
-		withheld := closureCallsCMethod(pass, s.run, deferredCMethods) ||
-			(onlyStableFixes && closureCallsCMethod(pass, s.run, testScopedCMethods))
+		reach := closureCReach(pass, s.run)
+		withheld := reach.deferred || (onlyStableFixes && reach.testScoped)
 		if s.outer != nil {
 			s.recvText = s.outer.tName
 			s.reported = s.outer.reported
@@ -429,30 +429,114 @@ func targetFromQtNew(pass *analysis.Pass, origins map[types.Object]qtCOrigin, ru
 	return tIdent.Name, true
 }
 
-// closureCallsCMethod reports whether run's closure names one of methods on
-// its own *qt.C parameter.
+// cReach says what a closure can do to its own *qt.C.
+type cReach struct {
+	// deferred is set when the closure can reach quicktest's
+	// deferred-execution API, and testScoped when it can reach a method whose
+	// scope is the test rather than the assertion.
+	deferred   bool
+	testScoped bool
+}
+
+// closureCReach works out what run's closure can do to its own *qt.C.
 //
-// A selector is enough: c.Cleanup taken as a method value and called later is
-// the same reach as calling it outright.
-func closureCallsCMethod(pass *analysis.Pass, run qtCRun, methods map[string]bool) bool {
+// The question the withholding rules ask is not "does this closure write
+// c.Defer" but "can Defer be called on this *qt.C", and the two come apart at
+// every indirection: cc := c, helper(c), holder{c: c}. Matching method names
+// against the closure's own parameter sees only the shapes that spell them
+// out, so this works the other way round. It follows the *qt.C through the
+// plain assignments it can see, classifies each use by the method that use
+// selects, and treats a use it cannot see through as reaching anything.
+//
+// A selector is enough on its own: c.Cleanup taken as a method value and
+// called later reaches exactly as far as calling it outright.
+func closureCReach(pass *analysis.Pass, run qtCRun) cReach {
 	if run.cObj == nil {
-		return false
+		return cReach{}
 	}
-	var found bool
-	ast.Inspect(run.lit, func(n ast.Node) bool {
-		if found {
-			return false
+	held := heldQtCObjects(pass, run.lit, run.cObj)
+
+	var reach cReach
+	inspectWithParent(run.lit, func(n, parent ast.Node) {
+		ident, ok := n.(*ast.Ident)
+		if !ok || !held[pass.TypesInfo.Uses[ident]] {
+			return
 		}
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok || !methods[sel.Sel.Name] {
-			return true
+		if sel, ok := parent.(*ast.SelectorExpr); ok && sel.X == ident {
+			switch {
+			case deferredCMethods[sel.Sel.Name]:
+				reach.deferred = true
+			case testScopedCMethods[sel.Sel.Name]:
+				reach.testScoped = true
+			}
+			return
 		}
-		if ident, ok := sel.X.(*ast.Ident); ok && pass.TypesInfo.Uses[ident] == run.cObj {
-			found = true
+		if _, rhs, ok := soleAssign(parent); ok && rhs == ident {
+			// The assignment that hands the *qt.C on is already followed.
+			return
 		}
-		return true
+		// The *qt.C goes somewhere this rule cannot follow: into a helper, a
+		// struct, a slice. Anything at all could be called on it there, and
+		// withholding a fix that was not needed costs only a fix.
+		reach.deferred = true
+		reach.testScoped = true
 	})
-	return found
+	return reach
+}
+
+// heldQtCObjects returns cObj together with every variable inside lit that a
+// plain one-to-one assignment hands it to. The set is closed under
+// repetition, so cc := c followed by ccc := cc reaches ccc.
+//
+// A destination joins the set whatever its type. The alternative is to read
+// the assignment as an escape, which would be the stricter answer for the one
+// shape this exists to follow.
+func heldQtCObjects(pass *analysis.Pass, lit *ast.FuncLit, cObj types.Object) map[types.Object]bool {
+	held := map[types.Object]bool{cObj: true}
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(lit, func(n ast.Node) bool {
+			lhs, rhs, ok := soleAssign(n)
+			if !ok {
+				return true
+			}
+			src, ok := rhs.(*ast.Ident)
+			if !ok || !held[pass.TypesInfo.Uses[src]] {
+				return true
+			}
+			dst, ok := lhs.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			obj := pass.TypesInfo.Defs[dst]
+			if obj == nil {
+				obj = pass.TypesInfo.Uses[dst]
+			}
+			if obj == nil || held[obj] {
+				return true
+			}
+			held[obj] = true
+			changed = true
+			return true
+		})
+	}
+	return held
+}
+
+// soleAssign returns the two sides of a node that assigns one value to one
+// destination, which is the only shape a *qt.C is followed through.
+func soleAssign(n ast.Node) (lhs, rhs ast.Expr, ok bool) {
+	switch node := n.(type) {
+	case *ast.AssignStmt:
+		if len(node.Lhs) == 1 && len(node.Rhs) == 1 {
+			return node.Lhs[0], node.Rhs[0], true
+		}
+	case *ast.ValueSpec:
+		if len(node.Names) == 1 && len(node.Values) == 1 {
+			return node.Names[0], node.Values[0], true
+		}
+	}
+	return nil, nil, false
 }
 
 // newRunParam renders the closure's rewritten parameter, keeping the shape
