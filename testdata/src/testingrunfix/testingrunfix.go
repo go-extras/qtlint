@@ -111,3 +111,11 @@ func TestTestScopedMethod(t *testing.T) {
 		c.Assert(1, qt.Equals, 1)
 	})
 }
+
+// A one-line closure body: the opening brace, the statement and the closing
+// brace share a line, so the rewrite must open a line for the statement it
+// inserts instead of running the two together.
+func TestSingleLineBody(t *testing.T) {
+	c := qt.New(t)
+	c.Run("sub", func(c *qt.C) { c.Assert(1, qt.Equals, 1) }) // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+}

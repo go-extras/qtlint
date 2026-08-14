@@ -81,3 +81,7 @@ func assertNamedResult(t *testing.T) (c int) {
 	qt.Assert(t, 1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
 	return 0
 }
+
+// A one-line function body: the brace, the statement and the closing brace
+// share a line, so the rewrite must open a line for the qt.New it inserts.
+func assertSingleLineBody(t *testing.T) { qt.Assert(t, 1, qt.Equals, 1) } // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
