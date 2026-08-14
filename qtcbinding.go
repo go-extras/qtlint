@@ -5,12 +5,64 @@ import (
 	"go/token"
 	"go/types"
 	"strconv"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 )
 
+// quicktestPkgPath is the import path of the library whose usage this
+// analyzer enforces practices for.
+const quicktestPkgPath = "github.com/frankban/quicktest"
+
 // testingPkgPath is the import path of the standard library testing package.
 const testingPkgPath = "testing"
+
+// importedPkgName returns the name under which file imports path, or "" when
+// the file does not import it under a name a new reference could use: a blank
+// or dot import qualifies nothing.
+func importedPkgName(pass *analysis.Pass, file *ast.File, path string) string {
+	for _, imp := range file.Imports {
+		imported, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || imported != path {
+			continue
+		}
+		if imp.Name != nil {
+			if imp.Name.Name == "_" || imp.Name.Name == "." {
+				return ""
+			}
+			return imp.Name.Name
+		}
+		if obj, ok := pass.TypesInfo.Implicits[imp].(*types.PkgName); ok {
+			return obj.Name()
+		}
+	}
+	return ""
+}
+
+// enclosingFile returns the *ast.File at the root of an inspector stack.
+func enclosingFile(stack []ast.Node) *ast.File {
+	if len(stack) == 0 {
+		return nil
+	}
+	file, ok := stack[0].(*ast.File)
+	if !ok {
+		return nil
+	}
+	return file
+}
+
+// outermostFunc returns the outermost function declaration or literal on
+// stack. Every use of a variable declared inside a function lies within it,
+// so it bounds the search for the uses a rewrite would remove.
+func outermostFunc(stack []ast.Node) ast.Node {
+	for _, n := range stack {
+		switch n.(type) {
+		case *ast.FuncDecl, *ast.FuncLit:
+			return n
+		}
+	}
+	return nil
+}
 
 // isTestingTPtr reports whether typ is exactly *testing.T.
 //
@@ -62,8 +114,18 @@ func freeName(base string, taken map[string]bool) string {
 	}
 }
 
+// qtCOrigin records where a *qt.C variable came from.
+type qtCOrigin struct {
+	// arg is the expression passed to qt.New.
+	arg ast.Expr
+	// decl is the statement that declares the variable. A rewrite that
+	// removes the variable's last use has to remove this statement with it,
+	// or the result does not compile.
+	decl ast.Stmt
+}
+
 // collectQtCOrigins maps every *qt.C variable declared within root by a call
-// to qt.New to the argument of that call.
+// to qt.New to that call's argument and the declaring statement.
 //
 // Only c := qt.New(t) and var c = qt.New(t) are recognized. A *qt.C obtained
 // any other way (a parameter, a struct field, a helper's return value) has no
@@ -73,11 +135,10 @@ func freeName(base string, taken map[string]bool) string {
 // A variable that is written again after its declaration is dropped, because
 // the declaration is no longer a true statement about which test the *qt.C
 // holds. See invalidateRebound.
-func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.Expr {
-	origins := make(map[types.Object]ast.Expr)
+func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]qtCOrigin {
+	origins := make(map[types.Object]qtCOrigin)
 
-	declaredAt := make(map[types.Object]ast.Node)
-	record := func(name, value ast.Expr, decl ast.Node) {
+	record := func(name, value ast.Expr, decl ast.Stmt) {
 		ident, ok := name.(*ast.Ident)
 		if !ok {
 			return
@@ -87,8 +148,7 @@ func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.
 			return
 		}
 		if arg, ok := qtNewArg(pass, value); ok {
-			origins[obj] = arg
-			declaredAt[obj] = decl
+			origins[obj] = qtCOrigin{arg: arg, decl: decl}
 		}
 	}
 
@@ -104,7 +164,7 @@ func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.
 		return true
 	})
 
-	invalidateRebound(pass, root, origins, declaredAt)
+	invalidateRebound(pass, root, origins)
 
 	return origins
 }
@@ -118,13 +178,8 @@ func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.
 // onto a different test — silently, since both spellings compile. Taking the
 // variable's address puts the same write out of reach of this analysis, so it
 // is treated the same way.
-func invalidateRebound(
-	pass *analysis.Pass,
-	root ast.Node,
-	origins map[types.Object]ast.Expr,
-	declaredAt map[types.Object]ast.Node,
-) {
-	drop := func(expr ast.Expr, at ast.Node) {
+func invalidateRebound(pass *analysis.Pass, root ast.Node, origins map[types.Object]qtCOrigin) {
+	drop := func(expr ast.Expr, at ast.Stmt) {
 		ident, ok := stripParens(expr).(*ast.Ident)
 		if !ok {
 			return
@@ -133,7 +188,7 @@ func invalidateRebound(
 		if obj == nil {
 			obj = pass.TypesInfo.Defs[ident]
 		}
-		if _, ok := origins[obj]; ok && declaredAt[obj] != at {
+		if origin, ok := origins[obj]; ok && origin.decl != at {
 			delete(origins, obj)
 		}
 	}
@@ -158,18 +213,16 @@ func invalidateRebound(
 
 // collectQtCVarSpecs feeds every single-name, single-value var specification
 // in stmt to record.
-func collectQtCVarSpecs(stmt *ast.DeclStmt, record func(name, value ast.Expr, decl ast.Node)) {
+func collectQtCVarSpecs(stmt *ast.DeclStmt, record func(name, value ast.Expr, decl ast.Stmt)) {
 	decl, ok := stmt.Decl.(*ast.GenDecl)
-	if !ok || decl.Tok != token.VAR {
+	if !ok || decl.Tok != token.VAR || len(decl.Specs) != 1 {
 		return
 	}
-	for _, spec := range decl.Specs {
-		vs, ok := spec.(*ast.ValueSpec)
-		if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
-			continue
-		}
-		record(vs.Names[0], vs.Values[0], stmt)
+	vs, ok := decl.Specs[0].(*ast.ValueSpec)
+	if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
+		return
 	}
+	record(vs.Names[0], vs.Values[0], stmt)
 }
 
 // qtNewArg returns the sole argument of a call to quicktest's New function.
@@ -231,9 +284,72 @@ func enclosingBinder(pass *analysis.Pass, stack []ast.Node, obj types.Object) (a
 }
 
 // prependStmtEdit returns the edit that makes code the first statement of
-// body. The inserted text carries no indentation: every driver that applies a
+// body.
+//
+// Where the body's first statement already has a line to itself, the new
+// statement takes a line above it. Inserting straight after the brace also
+// works, but gofmt then pulls any trailing comment from the brace's line down
+// onto the inserted statement, so a comment written about a subtest ends up
+// reading as a comment about the qt.New that opens it.
+//
+// The inserted text carries no indentation: every driver that applies a
 // SuggestedFix reformats the file afterwards.
-func prependStmtEdit(body *ast.BlockStmt, code string) analysis.TextEdit {
+func prependStmtEdit(pass *analysis.Pass, body *ast.BlockStmt, code string) analysis.TextEdit {
+	if at, ok := firstStmtLineStart(pass, body); ok {
+		return analysis.TextEdit{Pos: at, End: at, NewText: []byte(code + "\n")}
+	}
 	at := body.Lbrace + 1
 	return analysis.TextEdit{Pos: at, End: at, NewText: []byte("\n" + code)}
+}
+
+// firstStmtLineStart returns the start of the line holding body's first
+// statement, and reports false when that statement shares its line with the
+// opening brace — inserting at the line start would then put the new
+// statement after it.
+func firstStmtLineStart(pass *analysis.Pass, body *ast.BlockStmt) (token.Pos, bool) {
+	if len(body.List) == 0 {
+		return token.NoPos, false
+	}
+	file := pass.Fset.File(body.Lbrace)
+	if file == nil {
+		return token.NoPos, false
+	}
+	first := file.Line(body.List[0].Pos())
+	if first <= file.Line(body.Lbrace) {
+		return token.NoPos, false
+	}
+	return file.LineStart(first), true
+}
+
+// wholeLineSpan returns the span covering every line node occupies, including
+// the final newline, and reports whether node is the only thing on them.
+//
+// Callers use it to delete a declaration a rewrite left unused. Deleting only
+// the node's own span would leave a blank line behind; deleting the whole
+// line when the node shares it with other code would take that code too, so
+// ok is false in that case and the caller must decline the rewrite.
+func wholeLineSpan(pass *analysis.Pass, node ast.Node) (start, end token.Pos, ok bool) {
+	file := pass.Fset.File(node.Pos())
+	if file == nil {
+		return token.NoPos, token.NoPos, false
+	}
+	content, err := pass.ReadFile(file.Name())
+	if err != nil || len(content) != file.Size() {
+		return token.NoPos, token.NoPos, false
+	}
+
+	lineStart := file.LineStart(file.Line(node.Pos()))
+	if strings.TrimSpace(string(content[file.Offset(lineStart):file.Offset(node.Pos())])) != "" {
+		return token.NoPos, token.NoPos, false
+	}
+
+	lineEnd := token.Pos(file.Base() + file.Size())
+	if endLine := file.Line(node.End()); endLine < file.LineCount() {
+		lineEnd = file.LineStart(endLine + 1)
+	}
+	if strings.TrimSpace(string(content[file.Offset(node.End()):file.Offset(lineEnd)])) != "" {
+		return token.NoPos, token.NoPos, false
+	}
+
+	return lineStart, lineEnd, true
 }

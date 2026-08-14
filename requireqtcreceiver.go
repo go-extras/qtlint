@@ -99,7 +99,7 @@ func checkRequireQtCReceiver(pass *analysis.Pass, stack []ast.Node, call *ast.Ca
 		// The name is taken from the whole function, not just its body: a
 		// receiver, parameter or named result shares the body's scope.
 		cName = freeName("c", identNamesIn(binder))
-		edits = append(edits, prependStmtEdit(body,
+		edits = append(edits, prependStmtEdit(pass, body,
 			fmt.Sprintf("%s := %s.New(%s)", cName, m.qtAlias, m.tIdent.Name)))
 	}
 
@@ -143,8 +143,8 @@ func visibleQtCFrom(pass *analysis.Pass, body *ast.BlockStmt, tObj types.Object,
 	}
 
 	var best types.Object
-	for obj, arg := range collectQtCOrigins(pass, body) {
-		ident, ok := arg.(*ast.Ident)
+	for obj, origin := range collectQtCOrigins(pass, body) {
+		ident, ok := origin.arg.(*ast.Ident)
 		if !ok || pass.TypesInfo.Uses[ident] != tObj {
 			continue
 		}

@@ -28,6 +28,8 @@
 // because both forms they choose between are correct quicktest:
 //   - -require-qt-c-receiver: qt.Assert(t, ...) / qt.Check(t, ...) which
 //     should be replaced with c.Assert(...) / c.Check(...) on a *qt.C
+//   - -require-testing-run: c.Run(name, func(c *qt.C)) which should be
+//     replaced with t.Run(name, func(t *testing.T)) plus a per-subtest qt.New
 //
 // This linter is designed to be used as a custom linter for golangci-lint.
 package qtlint
@@ -61,6 +63,12 @@ type analyzer struct {
 	// qt.Assert(t, …) / qt.Check(t, …) form. It is off by default: both forms
 	// are correct quicktest, and which one a project wants is a style choice.
 	requireQtCReceiver bool
+
+	// requireTestingRun enables the opt-in house-style rule that requires
+	// subtests to be written as t.Run(name, func(t *testing.T)) with a
+	// per-subtest qt.New rather than as c.Run. It is off by default: c.Run is
+	// a legitimate quicktest API and some projects prefer it.
+	requireTestingRun bool
 }
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
@@ -79,6 +87,9 @@ func NewAnalyzer() *analysis.Analyzer {
 	aa.Flags.BoolVar(&a.requireQtCReceiver, "require-qt-c-receiver", false,
 		"house-style rule, off by default: report qt.Assert(t, ...) and "+
 			"qt.Check(t, ...) and suggest the *qt.C method form")
+	aa.Flags.BoolVar(&a.requireTestingRun, "require-testing-run", false,
+		"house-style rule, off by default: report c.Run(...) subtests and "+
+			"suggest t.Run(name, func(t *testing.T)) with a per-subtest qt.New")
 	return aa
 }
 
@@ -127,7 +138,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 // They need the enclosing function to decide where a *qt.C would be created,
 // which Preorder does not provide, so they get their own WithStack traversal.
 func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector) {
-	if !a.requireQtCReceiver {
+	if !a.requireQtCReceiver && !a.requireTestingRun {
 		return
 	}
 
@@ -145,6 +156,9 @@ func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector)
 		}
 		if a.requireQtCReceiver {
 			checkRequireQtCReceiver(pass, stack, call)
+		}
+		if a.requireTestingRun {
+			a.checkRequireTestingRun(pass, stack, call)
 		}
 		return true
 	})
@@ -384,7 +398,7 @@ func isPackageQualified(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 		return false
 	}
 
-	return pkg.Imported().Path() == "github.com/frankban/quicktest"
+	return pkg.Imported().Path() == quicktestPkgPath
 }
 
 // isQuicktestCMethod checks if a selector is a method on *qt.C.
@@ -410,7 +424,7 @@ func isQuicktestCMethod(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 		return false
 	}
 
-	return obj.Pkg().Path() == "github.com/frankban/quicktest" && obj.Name() == "C"
+	return obj.Pkg().Path() == quicktestPkgPath && obj.Name() == "C"
 }
 
 // hasLenCheckerInfo holds the resolved information for a HasLen checker replacement.
@@ -1124,7 +1138,7 @@ func findQuicktestPkgAlias(pass *analysis.Pass, start ast.Node) string {
 			if !ok {
 				continue
 			}
-			if pkgName.Imported().Path() == "github.com/frankban/quicktest" {
+			if pkgName.Imported().Path() == quicktestPkgPath {
 				return name
 			}
 		}
@@ -1148,7 +1162,7 @@ func isQuicktestCType(t types.Type) bool {
 	if obj == nil || obj.Pkg() == nil {
 		return false
 	}
-	return obj.Pkg().Path() == "github.com/frankban/quicktest" && obj.Name() == "C"
+	return obj.Pkg().Path() == quicktestPkgPath && obj.Name() == "C"
 }
 
 func findQuicktestCVarName(pass *analysis.Pass, start ast.Node) string {
