@@ -508,6 +508,8 @@ The new parameter is named `t` unless the closure already refers to something ca
 
 **`-only-stable-fixes`** additionally withholds the fix — the diagnostic still fires — when the closure calls `Cleanup`, `Parallel`, `Setenv`, `Unsetenv`, `TempDir`, `Patch` or `Mkdir` on its own `*qt.C`. That is a review gate, not a correctness one: `C.Run` builds the closure's `*qt.C` from the subtest's own `*testing.T`, so both forms reach the same test, and measured against `quicktest v1.14.6` all seven behave identically either way — `Setenv`, `Unsetenv` and `Patch` restore at the same point, `Cleanup` runs at the same point, `TempDir` and `Mkdir` name the same subtest-scoped directory. What they have in common is that they tie a subtest to a test's *lifecycle* rather than to an assertion, which is where a reader has to agree that the subtest is the scope that was meant, so the flag lets a project migrate them by hand.
 
+Both sets are matched by asking **what can be called on the closure's `*qt.C`**, not what is written next to it. The `*qt.C` is followed through plain assignments — `cc := c` and on — and any use the rule cannot follow, such as `helper(c)` or `holder{c: c}`, is treated as reaching everything. That is what stops `cc := c; cc.Defer(...)` from shipping the panic through a route the method names never see; the cost is that a closure handing its `*qt.C` to a helper loses its automatic fix even when the helper does nothing interesting with it.
+
 When a fix is withheld for either reason, so are the fixes for any subtests nested inside it, and the receiver's declaration is kept, because the `c.Run` that was left alone still uses it.
 
 The rule does not fire when:

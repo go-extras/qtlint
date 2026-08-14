@@ -47,6 +47,36 @@ func TestWithheldMethods(t *testing.T) {
 	})
 }
 
+// holder puts a *qt.C somewhere the rule cannot follow it.
+type holder struct{ c *qt.C }
+
+// cleanUp reaches a test-scoped method through a parameter.
+func cleanUp(c *qt.C) { c.Cleanup(func() {}) }
+
+// The indirect routes to a test-scoped method are withheld too. Naming the
+// methods and matching them against the closure's own parameter sees only the
+// closures that spell them out; an alias, a helper and a struct field all
+// reach the same methods without ever writing them next to c.
+func TestIndirectReach(t *testing.T) {
+	c := qt.New(t)
+
+	c.Run("alias", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		cc := c
+		cc.Cleanup(func() {})
+	})
+	c.Run("helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		cleanUp(c)
+	})
+	c.Run("field", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		h := holder{c: c}
+		h.c.Setenv("K", "V")
+	})
+	c.Run("method value", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		f := c.Cleanup
+		f(func() {})
+	})
+}
+
 // An unstable outer withholds its fix, and the nested subtest withholds with
 // it: rewriting the inner alone would name a t the outer has not introduced.
 func TestNestedUnstableOuter(t *testing.T) {
