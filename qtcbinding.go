@@ -298,8 +298,12 @@ func prependStmtEdit(pass *analysis.Pass, body *ast.BlockStmt, code string) anal
 	if at, ok := firstStmtLineStart(pass, body); ok {
 		return analysis.TextEdit{Pos: at, End: at, NewText: []byte(code + "\n")}
 	}
+	// Either the body is empty, or its first statement shares the brace's line.
+	// Opening a line before the inserted statement is not enough for the second
+	// case: without a closing newline the statement already on that line runs
+	// straight into the inserted one and the result does not parse.
 	at := body.Lbrace + 1
-	return analysis.TextEdit{Pos: at, End: at, NewText: []byte("\n" + code)}
+	return analysis.TextEdit{Pos: at, End: at, NewText: []byte("\n" + code + "\n")}
 }
 
 // firstStmtLineStart returns the start of the line holding body's first
