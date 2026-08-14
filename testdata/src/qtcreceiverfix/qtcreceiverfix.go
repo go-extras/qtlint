@@ -51,3 +51,33 @@ func TestDeclaredLater(t *testing.T) {
 	c := qt.New(t)
 	c.Assert(2, qt.Equals, 2)
 }
+
+// A *qt.C that is assigned again is not reused. Its declaration no longer
+// says which test it holds, and reusing it would run the assertion against
+// other rather than against t.
+func assertRebound(t, other *testing.T) {
+	c := qt.New(t)
+	c = qt.New(other)
+	c.Assert(0, qt.Equals, 0)
+
+	qt.Assert(t, 1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+}
+
+// The name c is taken by a parameter the body never mentions. Parameters
+// share the body's scope, so c := qt.New(t) here would not declare anything.
+func assertUnusedParam(t *testing.T, c int) {
+	qt.Assert(t, 1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+}
+
+type harness struct{}
+
+// The name c is taken by a method receiver.
+func (c harness) assert(t *testing.T) {
+	qt.Assert(t, 1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+}
+
+// The name c is taken by a named result.
+func assertNamedResult(t *testing.T) (c int) {
+	qt.Assert(t, 1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+	return 0
+}
