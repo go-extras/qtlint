@@ -112,6 +112,20 @@ func TestTestScopedMethod(t *testing.T) {
 	})
 }
 
+// The acceptance control for Chdir and Context. Both are in the review-gate
+// set, and a set entry only withholds under -only-stable-fixes: with no flag
+// set the fix has to arrive, or the entry has quietly become a correctness
+// rule that nobody asked for.
+func TestChdirAndContextFixedByDefault(t *testing.T) {
+	c := qt.New(t)
+	c.Run("chdir", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Chdir("testdata")
+	})
+	c.Run("context", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		_ = c.Context()
+	})
+}
+
 // A closure calling Defer is withheld with no flag set. C.Run calls Done on
 // the *qt.C it hands the closure and a bare qt.New(t) does not, so this
 // rewrite would replace a passing test with one that panics with "Done not

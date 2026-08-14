@@ -6,9 +6,18 @@
 // cannot reach. Signatures are copied from quicktest v1.14.6; the real C
 // embeds testing.TB and inherits Cleanup, TempDir and the rest from it, which
 // this stub spells out instead.
+//
+// The embedded testing.TB is where a method goes missing. An inventory taken
+// from C's own declarations sees Assert, Run and the deferred-execution API
+// and stops there, while testing.TB keeps growing: Chdir and Context arrived
+// in Go 1.24 and are as test-scoped as Setenv and TempDir. Whatever this stub
+// does not declare, no fixture can reach.
 package quicktest
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // C is a quicktest checker.
 type C struct {
@@ -35,8 +44,16 @@ func (c *C) Run(name string, f func(c *C)) bool {
 	return true
 }
 
+// Chdir changes the working directory for the duration of the test. It comes
+// from the embedded testing.TB, as of Go 1.24.
+func (c *C) Chdir(dir string) {}
+
 // Cleanup registers f to be called when the test is done.
 func (c *C) Cleanup(f func()) {}
+
+// Context returns a context canceled when the test finishes. It comes from the
+// embedded testing.TB, as of Go 1.24.
+func (c *C) Context() context.Context { return context.Background() }
 
 // Defer registers f to be called when the test's Done method is called.
 func (c *C) Defer(f func()) {}
