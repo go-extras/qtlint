@@ -51,6 +51,7 @@ var (
 	Equals     Checker
 	DeepEquals Checker
 	HasLen     Checker
+	Contains   Checker
 	ErrorIs    Checker
 	ErrorAs    Checker
 )

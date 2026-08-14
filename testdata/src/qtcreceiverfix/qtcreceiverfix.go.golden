@@ -1,0 +1,59 @@
+package qtcreceiverfix
+
+import (
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+)
+
+// Case 1: an existing *qt.C built from this t is reused.
+func TestExistingC(t *testing.T) {
+	c := qt.New(t)
+	c.Assert(0, qt.Equals, 0)
+
+	c.Assert(1, qt.Equals, 1) // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+	c.Check(2, qt.Equals, 2)  // want "qtlint: use c.Check\\(...\\) instead of qt.Check\\(t, ...\\)"
+}
+
+// Case 2: a *qt.C is created once, however many assertions need it.
+func TestNoC(t *testing.T) {
+	c := qt.New(t)
+	c.Assert(1, qt.Equals, 1)                       // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+	c.Check(2, qt.Equals, 2)                        // want "qtlint: use c.Check\\(...\\) instead of qt.Check\\(t, ...\\)"
+	c.Assert(3, qt.Equals, 3, qt.Commentf("third")) // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+}
+
+// Case 3: the helper gets its own *qt.C.
+func assertOne(t *testing.T, got int) {
+	c := qt.New(t)
+	c.Assert(got, qt.Equals, 1) // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+}
+
+// The subtest closure binds t, so that is where the *qt.C is created.
+func TestSubtest(t *testing.T) {
+	c := qt.New(t)
+	c.Assert(0, qt.Equals, 0)
+
+	t.Run("sub", func(t *testing.T) {
+		c := qt.New(t)
+		c.Assert(1, qt.Equals, 1) // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+	})
+}
+
+// The name c is taken, so the next free one is used.
+func TestNameTaken(t *testing.T) {
+	c2 := qt.New(t)
+	c := 42
+	c2.Assert(c, qt.Equals, 42) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+}
+
+// A *qt.C declared further down is not reused: naming it here would put the
+// reference before its declaration.
+func TestDeclaredLater(t *testing.T) {
+	c2 := qt.New(t)
+	c2.Assert(1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+
+	c := qt.New(t)
+	c.Assert(2, qt.Equals, 2)
+}
+

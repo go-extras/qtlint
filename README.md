@@ -37,6 +37,12 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 
 This ensures that tests use the most direct and readable checker available.
 
+A second, smaller group of rules is **opt-in and off by default**. They choose between two forms that are both correct quicktest, so whether a project wants them enforced is a house-style decision rather than a correctness one:
+
+- `-require-qt-c-receiver`: detecting `qt.Assert(t, …)` / `qt.Check(t, …)` and suggesting `c.Assert(…)` / `c.Check(…)` on a `*qt.C`
+
+Nothing in the default rule set changes when these flags are absent.
+
 ## Installation
 
 ### As a golangci-lint plugin
@@ -97,6 +103,10 @@ qtlint -fix -diff ./...
 
 # Only apply fixes the linter is confident about (skip best-effort rewrites)
 qtlint -fix -only-stable-fixes ./...
+
+# Enable an opt-in house-style rule (off unless asked for)
+qtlint -require-qt-c-receiver ./...
+qtlint -fix -require-qt-c-receiver ./...
 ```
 
 ### With golangci-lint
@@ -122,6 +132,8 @@ Some rewrites have a clear, semantically equivalent target (e.g. `qt.Not(qt.IsNi
 Pass `-only-stable-fixes` to withhold auto-fixes for those uncertain cases. The diagnostic still fires so you can review and apply the change by hand; only the auto-applicable fix is held back. All other rules continue to provide fixes as before.
 
 ## Rules
+
+Rules 1 to 11 are on by default. Rule 12 and above are **house-style rules, off by default**, and each is named after the flag that turns it on.
 
 All rules support **automatic fixing** with the `-fix` flag. For rules 9 and 10 the rewrite is best-effort in some variants (multi-arg `t.Fatal`, non-literal format string, `if`-init statement, spread arguments); the unsafe-by-default variants are still emitted as fixes but can be skipped with `-only-stable-fixes`. Cases that cannot be rewritten at all (init-statement and spread args) remain report-only.
 
@@ -411,6 +423,42 @@ qt.Assert(t, x, qt.IsNil)
 **Error message:**
 ```
 qtlint: use qt.IsNil instead of qt.Equals, nil
+```
+
+### 12. Require assertions to go through a `*qt.C` receiver — `-require-qt-c-receiver`
+
+**House-style rule, off by default.** quicktest exposes both a package-level assertion taking a `testing.TB` and a method on `*qt.C`, and both are correct. Some projects require the second form everywhere, so that a test function has exactly one `*qt.C` and every assertion goes through it: the `*qt.C` is what carries `c.Cleanup`, `c.Setenv`, `c.TempDir`, `c.Patch`, `c.Defer` and `c.Parallel`, as well as any comment state the test attached to it, and a file that mixes both forms grows two ways of reaching the test's context. Pass `-require-qt-c-receiver` to enforce it; without the flag nothing below is reported.
+
+**Bad:**
+```go
+func TestExample(t *testing.T) {
+    qt.Assert(t, got, qt.Equals, want)
+    qt.Check(t, err, qt.IsNil)
+}
+```
+
+**Good:**
+```go
+func TestExample(t *testing.T) {
+    c := qt.New(t)
+    c.Assert(got, qt.Equals, want)
+    c.Check(err, qt.IsNil)
+}
+```
+
+**Auto-fix:** ✅ for every reported call, and `-only-stable-fixes` withholds none of them — creating a `*qt.C` from a `*testing.T` cannot change what the test does. The fix reuses a `*qt.C` that was created from the same `*testing.T` when one is visible under its own name at the call site, and otherwise inserts `c := qt.New(t)` as the first statement of the function that *binds* that `*testing.T` — the subtest closure rather than the parent test when the assertion sits inside one, and the helper's own body when the assertion sits in a helper taking `t *testing.T`. When the name `c` is already taken in that function, the next free name (`c2`, `c3`, …) is used rather than declining the fix.
+
+The rule does not fire when:
+
+- the first argument is not an identifier of type `*testing.T` — `qt.Assert` accepts any `testing.TB`, and a `*testing.B`, a bare `testing.TB` or a field selector such as `h.t` is left alone;
+- no function on the enclosing stack binds that identifier as a parameter, so there is nowhere to put the `qt.New` call.
+
+An aliased quicktest import is matched the same way the default rules match it — through the type checker, not the identifier — and the fix writes whichever alias the file uses.
+
+**Error message:**
+```
+qtlint: use c.Assert(...) instead of qt.Assert(t, ...)
+qtlint: use c.Check(...) instead of qt.Check(t, ...)
 ```
 
 ## Examples

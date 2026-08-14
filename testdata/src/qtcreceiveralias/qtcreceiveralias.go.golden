@@ -1,0 +1,24 @@
+package qtcreceiveralias
+
+import (
+	"testing"
+
+	myqt "github.com/frankban/quicktest"
+)
+
+// The rule resolves the quicktest package through the type checker, exactly
+// as the default rules do, so an alias other than qt is matched and the fix
+// writes the alias the file actually uses.
+func TestAlias(t *testing.T) {
+	c := myqt.New(t)
+	c.Assert(1, myqt.Equals, 1) // want "qtlint: use c.Assert\\(...\\) instead of myqt.Assert\\(t, ...\\)"
+	c.Check(2, myqt.Equals, 2)  // want "qtlint: use c.Check\\(...\\) instead of myqt.Check\\(t, ...\\)"
+}
+
+// An aliased import is also what a reused *qt.C is found through.
+func TestAliasExistingC(t *testing.T) {
+	qc := myqt.New(t)
+	qc.Assert(0, myqt.Equals, 0)
+
+	qc.Assert(1, myqt.Equals, 1) // want "qtlint: use qc.Assert\\(...\\) instead of myqt.Assert\\(t, ...\\)"
+}
