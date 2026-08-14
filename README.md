@@ -40,6 +40,7 @@ This ensures that tests use the most direct and readable checker available.
 A second, smaller group of rules is **opt-in and off by default**. They choose between two forms that are both correct quicktest, so whether a project wants them enforced is a house-style decision rather than a correctness one:
 
 - `-require-qt-c-receiver`: detecting `qt.Assert(t, …)` / `qt.Check(t, …)` and suggesting `c.Assert(…)` / `c.Check(…)` on a `*qt.C`
+- `-require-testing-run`: detecting `c.Run(name, func(c *qt.C))` and suggesting `t.Run(name, func(t *testing.T))` with a per-subtest `qt.New`
 
 Nothing in the default rule set changes when these flags are absent.
 
@@ -107,6 +108,7 @@ qtlint -fix -only-stable-fixes ./...
 # Enable an opt-in house-style rule (off unless asked for)
 qtlint -require-qt-c-receiver ./...
 qtlint -fix -require-qt-c-receiver ./...
+qtlint -fix -require-testing-run ./...
 ```
 
 ### With golangci-lint
@@ -133,7 +135,7 @@ Pass `-only-stable-fixes` to withhold auto-fixes for those uncertain cases. The 
 
 ## Rules
 
-Rules 1 to 11 are on by default. Rule 12 and above are **house-style rules, off by default**, and each is named after the flag that turns it on.
+Rules 1 to 11 are on by default. Rules 12 and 13 are **house-style rules, off by default**, and each is named after the flag that turns it on.
 
 All rules support **automatic fixing** with the `-fix` flag. For rules 9 and 10 the rewrite is best-effort in some variants (multi-arg `t.Fatal`, non-literal format string, `if`-init statement, spread arguments); the unsafe-by-default variants are still emitted as fixes but can be skipped with `-only-stable-fixes`. Cases that cannot be rewritten at all (init-statement and spread args) remain report-only.
 
@@ -459,6 +461,60 @@ An aliased quicktest import is matched the same way the default rules match it �
 ```
 qtlint: use c.Assert(...) instead of qt.Assert(t, ...)
 qtlint: use c.Check(...) instead of qt.Check(t, ...)
+```
+
+### 13. Require `t.Run` with a per-subtest `qt.New` — `-require-testing-run`
+
+**House-style rule, off by default.** `c.Run` is a legitimate quicktest API and some projects prefer it, so nothing below is reported unless you pass `-require-testing-run`.
+
+Projects that enforce the standard-library form do it for three reasons. The subtest signature stops being special: `t.Run(name, func(t *testing.T))` is what every Go reader and every tool already expects, so table-driven helpers and anything taking a `*testing.T` compose without a shim. Shadowing becomes visible: `c.Run(name, func(c *qt.C))` shadows the outer `c` with a different `*qt.C` of the same name and type, and a reader cannot tell from the body which one a line means. And the parent's `*qt.C` stops being reachable by accident — under `c.Run` a closure can still name the *enclosing* `c` for a `Cleanup` or a `Patch`, which binds to the parent test rather than the subtest, and that is more often a mistake than an intention.
+
+**Bad:**
+```go
+func TestExample(t *testing.T) {
+    c := qt.New(t)
+    c.Run("sub", func(c *qt.C) {
+        c.Assert(got, qt.Equals, want)
+    })
+}
+```
+
+**Good:**
+```go
+func TestExample(t *testing.T) {
+    t.Run("sub", func(t *testing.T) {
+        c := qt.New(t)
+        c.Assert(got, qt.Equals, want)
+    })
+}
+```
+
+Note that this repository's own tests are written in the target form. Enabling this rule while leaving a `c.Run` example in the project's own style guide is how the rule gets argued with six months later, so a project adopting it should update its contributor documentation at the same time — most `quicktest` examples in the wild show `c.Run`.
+
+**Auto-fix:** ✅ for every reported site, and the rewrite touches four things at once so that the result compiles:
+
+- the receiver of `.Run` becomes the `*testing.T` the `*qt.C` was made from;
+- the closure parameter becomes `t *testing.T`, keeping the original `*qt.C` identifier for the body to use;
+- `c := qt.New(t)` opens the closure — but only when the closure still needs a `*qt.C` after the rewrite. A closure whose sole use of it was the receiver of a nested `c.Run` loses that use, and a declaration with no uses does not compile;
+- the receiver's own `c := qt.New(t)` is removed when the rewrite takes its last use, for the same reason.
+
+The new parameter is named `t` unless the closure already refers to something called `t` — usually the enclosing test — in which case the next free name is used and that reference keeps meaning what it meant.
+
+**Nested subtests** are rewritten as one consistent set of edits. The inner call names the parameter the outer rewrite introduces, which is resolved before the inner one is planned; applying an outer rewrite on its own would otherwise leave an inner `c.Run` whose receiver no longer exists.
+
+**`-only-stable-fixes`** withholds the fix — the diagnostic still fires — when the closure calls `Cleanup`, `Parallel`, `Setenv`, `TempDir`, `Patch`, `Defer` or `Mkdir` on its own `*qt.C`. Those bind to whichever test the `*qt.C` came from, and the rewrite deliberately rebinds them to the subtest; a project relying on `c.Run`'s parent-scoped behavior would see a change. That is the one shape where this rewrite can alter what a test does, which is exactly what the flag is for. When a fix is withheld, so are the fixes for any subtests nested inside it, and the receiver's declaration is kept, because the withheld `c.Run` still uses it.
+
+The rule does not fire when:
+
+- **the subtest is a named function rather than a literal.** Its signature is `func(*qt.C)`, which `t.Run` will not accept; rewriting it means changing a declaration that may have callers elsewhere in the package or beyond it. That is out of scope, and since a reported site with no fix puts the work back on the author for a rewrite the tool declined to reason about, such a call is not reported at all;
+- **the receiver is not traceable to a `*testing.T`** — a `*qt.C` that arrived as a parameter, came out of a struct field or a factory, or was assigned again after `qt.New`. There is no name the rewrite could put in front of `.Run`;
+- **the file does not import `testing` under a usable name**, since the new parameter type has to name it.
+
+Both packages are resolved through the type checker, so an aliased `quicktest` or `testing` import is matched and the rewrite writes whichever names the file uses.
+
+**Error message:**
+```
+qtlint: use t.Run with a per-subtest qt.New instead of c.Run
 ```
 
 ## Examples

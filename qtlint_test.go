@@ -84,6 +84,17 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "qtcreceiveroff")
 	})
+
+	t.Run("require-testing-run patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-testing-run")
+		analysistest.Run(t, testdata, analyzer, "testingrun")
+	})
+
+	t.Run("require-testing-run is off by default", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "testingrunoff")
+	})
 }
 
 // setFlag enables a boolean analyzer flag, failing the test if the flag does

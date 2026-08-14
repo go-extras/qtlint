@@ -29,6 +29,31 @@ func (c *C) Run(name string, f func(c *C)) bool {
 	return true
 }
 
+// Cleanup registers f to be called when the test is done.
+func (c *C) Cleanup(f func()) {}
+
+// Defer registers f to be called when the test's Done method is called.
+func (c *C) Defer(f func()) {}
+
+// Mkdir creates a directory that is removed when the test is done.
+func (c *C) Mkdir(name string) string {
+	return name
+}
+
+// Parallel signals that the test is to be run in parallel.
+func (c *C) Parallel() {}
+
+// Patch sets a variable to a temporary value for the duration of the test.
+func (c *C) Patch(dest, value any) {}
+
+// Setenv sets an environment variable for the duration of the test.
+func (c *C) Setenv(key, value string) {}
+
+// TempDir returns a temporary directory removed when the test is done.
+func (c *C) TempDir() string {
+	return ""
+}
+
 // Assert runs the given check using the provided t and stops execution in case of failure.
 func Assert(t testing.TB, got interface{}, checker Checker, args ...interface{}) bool {
 	return true

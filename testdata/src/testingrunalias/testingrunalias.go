@@ -1,0 +1,17 @@
+package testingrunalias
+
+import (
+	tst "testing"
+
+	myqt "github.com/frankban/quicktest"
+)
+
+// The rule resolves both packages through the type checker, so an alias other
+// than qt is matched, and the rewrite writes whichever names the file uses —
+// including for the testing package, which the parameter type has to name.
+func TestAlias(t *tst.T) {
+	c := myqt.New(t)
+	c.Run("sub", func(c *myqt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Assert(1, myqt.Equals, 1)
+	})
+}

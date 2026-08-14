@@ -55,4 +55,26 @@ func TestFixes(t *testing.T) {
 		setFlag(t, analyzer, "require-qt-c-receiver")
 		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "qtcreceiveralias")
 	})
+
+	t.Run("testingrunfix", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-testing-run")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunfix")
+	})
+
+	t.Run("testingrunalias", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-testing-run")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunalias")
+	})
+
+	// With --only-stable-fixes: a closure using a test-scoped *qt.C method
+	// keeps its diagnostic and loses its fix, and the receiver it shares with
+	// a rewritten sibling keeps its declaration.
+	t.Run("testingrun only-stable-fixes", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-testing-run")
+		setFlag(t, analyzer, "only-stable-fixes")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunonlystable")
+	})
 }
