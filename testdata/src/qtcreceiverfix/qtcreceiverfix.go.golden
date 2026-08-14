@@ -46,3 +46,14 @@ func TestNameTaken(t *testing.T) {
 	c := 42
 	c2.Assert(c, qt.Equals, 42) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
 }
+
+// A *qt.C declared further down is not reused: naming it here would put the
+// reference before its declaration.
+func TestDeclaredLater(t *testing.T) {
+	c2 := qt.New(t)
+	c2.Assert(1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+
+	c := qt.New(t)
+	c.Assert(2, qt.Equals, 2)
+}
+

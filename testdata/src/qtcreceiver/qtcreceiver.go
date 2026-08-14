@@ -47,6 +47,15 @@ func TestNameTaken(t *testing.T) {
 	qt.Assert(t, c, qt.Equals, 42) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
 }
 
+// A *qt.C that is declared further down is not reused: the rewritten call
+// would name it before its declaration.
+func TestDeclaredLater(t *testing.T) {
+	qt.Assert(t, 1, qt.Equals, 1) // want "qtlint: use c2.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+
+	c := qt.New(t)
+	c.Assert(2, qt.Equals, 2)
+}
+
 // A *qt.C built from a different *testing.T is not reused: c belongs to the
 // subtest, and the assertion is against the parent's t.
 func TestOtherT(t *testing.T) {
