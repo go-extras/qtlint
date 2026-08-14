@@ -2,6 +2,7 @@ package qtlint_test
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -92,7 +93,8 @@ func TestAnalyzer(t *testing.T) {
 	t.Run("require-testing-run patterns", func(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		setFlag(t, analyzer, "require-testing-run")
-		analysistest.Run(t, testdata, analyzer, "testingrun")
+		results := analysistest.Run(t, testdata, analyzer, "testingrun")
+		assertReportedOnce(t, results)
 	})
 
 	t.Run("require-testing-run is off by default", func(t *testing.T) {
@@ -117,6 +119,32 @@ func TestAnalyzer(t *testing.T) {
 			"bothrules.go:35:2: qtlint: use c.Check(...) instead of qt.Check(t, ...)",
 		})
 	})
+}
+
+// assertReportedOnce fails when a pass reported the same message at the same
+// position more than once.
+//
+// -require-testing-run plans one outermost function at a time, and planning
+// anything smaller as well would plan the sites inside a closure twice over.
+// Nothing else in the suite can see that: analysistest matches diagnostics
+// against want comments by position and a second one at a position that
+// already matched is simply matched again, the text driver prints one line per
+// position, and -fix applies each edit set once because the two are identical.
+// The count is what tells them apart, and -json is where a user would see it.
+func assertReportedOnce(t *testing.T, results []*analysistest.Result) {
+	t.Helper()
+
+	for _, res := range results {
+		seen := make(map[string]int)
+		for _, diag := range res.Diagnostics {
+			seen[fmt.Sprintf("%s: %s", res.Pass.Fset.Position(diag.Pos), diag.Message)]++
+		}
+		for _, key := range slices.Sorted(maps.Keys(seen)) {
+			if seen[key] > 1 {
+				t.Errorf("reported %d times, want once: %s", seen[key], key)
+			}
+		}
+	}
 }
 
 // assertReportedOrder checks the sequence of diagnostics a pass reported,
