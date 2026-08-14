@@ -491,7 +491,7 @@ func TestExample(t *testing.T) {
 
 Note that this repository's own tests are written in the target form. Enabling this rule while leaving a `c.Run` example in the project's own style guide is how the rule gets argued with six months later, so a project adopting it should update its contributor documentation at the same time — most `quicktest` examples in the wild show `c.Run`.
 
-**Auto-fix:** ✅ for every reported site, and the rewrite touches four things at once so that the result compiles:
+**Auto-fix:** ✅ for every reported site except the ones noted below, and the rewrite touches four things at once so that the result compiles:
 
 - the receiver of `.Run` becomes the `*testing.T` the `*qt.C` was made from;
 - the closure parameter becomes `t *testing.T`, keeping the original `*qt.C` identifier for the body to use;
@@ -504,7 +504,11 @@ The new parameter is named `t` unless the closure already refers to something ca
 
 **A whole function is planned before any of it is reported**, because its sites decide each other's fate. Whether the receiver's declaration survives depends on which of its `c.Run` calls are actually rewritten, so a call the rule declined — one whose `t` is shadowed where the rewrite would write it, say — keeps that declaration alive for every sibling. And a nested call is declined whenever the call around it is, since rewriting it alone would attach the subtest to the parent test instead. Answering "which sites get edits" and "does the declaration survive" separately is how a declaration comes to be deleted while a declined sibling still names it.
 
-**`-only-stable-fixes`** withholds the fix — the diagnostic still fires — when the closure calls `Cleanup`, `Parallel`, `Setenv`, `TempDir`, `Patch`, `Defer` or `Mkdir` on its own `*qt.C`. Those bind to whichever test the `*qt.C` came from, and the rewrite deliberately rebinds them to the subtest; a project relying on `c.Run`'s parent-scoped behavior would see a change. That is the one shape where this rewrite can alter what a test does, which is exactly what the flag is for. When a fix is withheld, so are the fixes for any subtests nested inside it, and the receiver's declaration is kept, because the withheld `c.Run` still uses it.
+**`Defer` and `Done` are withheld whatever the flags say.** They are quicktest's deferred-execution API, and they are the one shape where this rewrite can turn a passing test into a panicking one. `(*C).Defer` registers a cleanup that panics unless `Done` has run first; `C.Run` wraps the closure it calls in `defer c2.Done()`, a bare `c := qt.New(t)` does not, and nothing in the rewritten closure would. Measured against `quicktest v1.14.6`: a subtest calling `c.Defer` passes under `c.Run` and panics with `Done not called after Defer` under `t.Run` plus `qt.New`. The diagnostic still fires; the fix does not.
+
+**`-only-stable-fixes`** additionally withholds the fix — the diagnostic still fires — when the closure calls `Cleanup`, `Parallel`, `Setenv`, `Unsetenv`, `TempDir`, `Patch` or `Mkdir` on its own `*qt.C`. That is a review gate, not a correctness one: `C.Run` builds the closure's `*qt.C` from the subtest's own `*testing.T`, so both forms reach the same test, and measured against `quicktest v1.14.6` all seven behave identically either way — `Setenv`, `Unsetenv` and `Patch` restore at the same point, `Cleanup` runs at the same point, `TempDir` and `Mkdir` name the same subtest-scoped directory. What they have in common is that they tie a subtest to a test's *lifecycle* rather than to an assertion, which is where a reader has to agree that the subtest is the scope that was meant, so the flag lets a project migrate them by hand.
+
+When a fix is withheld for either reason, so are the fixes for any subtests nested inside it, and the receiver's declaration is kept, because the `c.Run` that was left alone still uses it.
 
 The rule does not fire when:
 
