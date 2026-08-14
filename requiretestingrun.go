@@ -8,22 +8,47 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
+// deferredCMethods are quicktest's deferred-execution API, and they are the
+// one shape where this rewrite can turn a passing test into a panicking one.
+//
+// (*C).Defer registers a cleanup that panics unless Done has run first.
+// C.Run wraps the closure it calls in "defer c2.Done()"; a bare
+// c := qt.New(t) does not, and nothing in the rewritten closure would. So a
+// closure that calls Defer keeps its diagnostic and loses its fix whatever
+// -only-stable-fixes says. Done travels with Defer because the two are one
+// API, and withholding a fix nobody needed costs only a fix.
+//
+// Measured against quicktest v1.14.6: the c.Run form of a subtest calling
+// c.Defer passes, and the t.Run plus qt.New form panics with "Done not
+// called after Defer".
+var deferredCMethods = map[string]bool{
+	"Defer": true,
+	"Done":  true,
+}
+
 // testScopedCMethods are the *qt.C methods that act on the test the *qt.C was
 // made from rather than on the assertion at hand.
 //
-// Under c.Run they bind to whichever test the receiver came from; after the
-// rewrite the closure's *qt.C is made from the subtest, which is what a
-// reader almost always meant. "Almost always" is the whole reason
-// -only-stable-fixes exists, so a closure that calls one of these keeps its
-// diagnostic but loses its automatic fix under that flag.
+// The rewrite does not move them. C.Run builds the closure's *qt.C from the
+// subtest's own *testing.T, so both forms reach the same test: measured
+// against quicktest v1.14.6, Setenv, Unsetenv and Patch restore at the same
+// point, Cleanup runs at the same point, and TempDir and Mkdir name the same
+// subtest-scoped directory either way.
+//
+// They are still the calls that tie a subtest to a test's lifecycle rather
+// than to an assertion, which is where a reader has to agree that the subtest
+// is the scope that was meant. -only-stable-fixes withholds the fix for a
+// closure that calls one so a project can migrate those by hand; the
+// diagnostic still fires. That is a review gate, not a correctness one. The
+// correctness one is deferredCMethods, and it is not optional.
 var testScopedCMethods = map[string]bool{
 	"Cleanup":  true,
-	"Defer":    true,
 	"Mkdir":    true,
 	"Parallel": true,
 	"Patch":    true,
 	"Setenv":   true,
 	"TempDir":  true,
+	"Unsetenv": true,
 }
 
 // qtCRun describes a c.Run(name, func(c *qt.C) { … }) call.
@@ -226,7 +251,8 @@ func bindingSite(lexParent *runSite, obj types.Object) *runSite {
 // rewrite has not introduced.
 func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
 	for _, s := range p.sites {
-		withheld := onlyStableFixes && closureUsesTestScopedMethod(pass, s.run)
+		withheld := closureCallsCMethod(pass, s.run, deferredCMethods) ||
+			(onlyStableFixes && closureCallsCMethod(pass, s.run, testScopedCMethods))
 		if s.outer != nil {
 			s.recvText = s.outer.tName
 			s.reported = s.outer.reported
@@ -403,10 +429,12 @@ func targetFromQtNew(pass *analysis.Pass, origins map[types.Object]qtCOrigin, ru
 	return tIdent.Name, true
 }
 
-// closureUsesTestScopedMethod reports whether run's closure calls one of the
-// *qt.C methods that bind to a test rather than to an assertion, on its own
-// parameter.
-func closureUsesTestScopedMethod(pass *analysis.Pass, run qtCRun) bool {
+// closureCallsCMethod reports whether run's closure names one of methods on
+// its own *qt.C parameter.
+//
+// A selector is enough: c.Cleanup taken as a method value and called later is
+// the same reach as calling it outright.
+func closureCallsCMethod(pass *analysis.Pass, run qtCRun, methods map[string]bool) bool {
 	if run.cObj == nil {
 		return false
 	}
@@ -416,7 +444,7 @@ func closureUsesTestScopedMethod(pass *analysis.Pass, run qtCRun) bool {
 			return false
 		}
 		sel, ok := n.(*ast.SelectorExpr)
-		if !ok || !testScopedCMethods[sel.Sel.Name] {
+		if !ok || !methods[sel.Sel.Name] {
 			return true
 		}
 		if ident, ok := sel.X.(*ast.Ident); ok && pass.TypesInfo.Uses[ident] == run.cObj {
