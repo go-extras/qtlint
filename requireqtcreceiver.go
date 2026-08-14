@@ -88,7 +88,7 @@ func checkRequireQtCReceiver(pass *analysis.Pass, stack []ast.Node, call *ast.Ca
 	// qt.New(t) can only be written where t is visible, so the function
 	// binding t bounds both the search for an existing *qt.C and the place
 	// a new one is created.
-	body := enclosingBindingBody(pass, stack, m.tObj)
+	binder, body := enclosingBinder(pass, stack, m.tObj)
 	if body == nil {
 		return
 	}
@@ -96,7 +96,9 @@ func checkRequireQtCReceiver(pass *analysis.Pass, stack []ast.Node, call *ast.Ca
 	edits := make([]analysis.TextEdit, 0, 3)
 	cName, reused := visibleQtCFrom(pass, body, m.tObj, call.Pos())
 	if !reused {
-		cName = freeName("c", identNamesIn(body))
+		// The name is taken from the whole function, not just its body: a
+		// receiver, parameter or named result shares the body's scope.
+		cName = freeName("c", identNamesIn(binder))
 		edits = append(edits, prependStmtEdit(body,
 			fmt.Sprintf("%s := %s.New(%s)", cName, m.qtAlias, m.tIdent.Name)))
 	}

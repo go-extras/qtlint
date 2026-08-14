@@ -69,10 +69,15 @@ func freeName(base string, taken map[string]bool) string {
 // any other way (a parameter, a struct field, a helper's return value) has no
 // statically known testing.TB behind it, which is why the rules below decline
 // to reason about it.
+//
+// A variable that is written again after its declaration is dropped, because
+// the declaration is no longer a true statement about which test the *qt.C
+// holds. See invalidateRebound.
 func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.Expr {
 	origins := make(map[types.Object]ast.Expr)
 
-	record := func(name, value ast.Expr) {
+	declaredAt := make(map[types.Object]ast.Node)
+	record := func(name, value ast.Expr, decl ast.Node) {
 		ident, ok := name.(*ast.Ident)
 		if !ok {
 			return
@@ -83,6 +88,7 @@ func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.
 		}
 		if arg, ok := qtNewArg(pass, value); ok {
 			origins[obj] = arg
+			declaredAt[obj] = decl
 		}
 	}
 
@@ -90,7 +96,7 @@ func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.
 		switch stmt := n.(type) {
 		case *ast.AssignStmt:
 			if stmt.Tok == token.DEFINE && len(stmt.Lhs) == 1 && len(stmt.Rhs) == 1 {
-				record(stmt.Lhs[0], stmt.Rhs[0])
+				record(stmt.Lhs[0], stmt.Rhs[0], stmt)
 			}
 		case *ast.DeclStmt:
 			collectQtCVarSpecs(stmt, record)
@@ -98,12 +104,61 @@ func collectQtCOrigins(pass *analysis.Pass, root ast.Node) map[types.Object]ast.
 		return true
 	})
 
+	invalidateRebound(pass, root, origins, declaredAt)
+
 	return origins
+}
+
+// invalidateRebound drops every origin whose variable is written again after
+// its declaration, or whose address is taken.
+//
+// An origin is only useful as a claim about which testing.TB a *qt.C holds.
+// "c := qt.New(t); c = qt.New(other)" makes that claim false from the second
+// statement onwards, and a rewrite that believed it would move assertions
+// onto a different test — silently, since both spellings compile. Taking the
+// variable's address puts the same write out of reach of this analysis, so it
+// is treated the same way.
+func invalidateRebound(
+	pass *analysis.Pass,
+	root ast.Node,
+	origins map[types.Object]ast.Expr,
+	declaredAt map[types.Object]ast.Node,
+) {
+	drop := func(expr ast.Expr, at ast.Node) {
+		ident, ok := stripParens(expr).(*ast.Ident)
+		if !ok {
+			return
+		}
+		obj := pass.TypesInfo.Uses[ident]
+		if obj == nil {
+			obj = pass.TypesInfo.Defs[ident]
+		}
+		if _, ok := origins[obj]; ok && declaredAt[obj] != at {
+			delete(origins, obj)
+		}
+	}
+
+	ast.Inspect(root, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				drop(lhs, node)
+			}
+		case *ast.RangeStmt:
+			drop(node.Key, node)
+			drop(node.Value, node)
+		case *ast.UnaryExpr:
+			if node.Op == token.AND {
+				drop(node.X, nil)
+			}
+		}
+		return true
+	})
 }
 
 // collectQtCVarSpecs feeds every single-name, single-value var specification
 // in stmt to record.
-func collectQtCVarSpecs(stmt *ast.DeclStmt, record func(name, value ast.Expr)) {
+func collectQtCVarSpecs(stmt *ast.DeclStmt, record func(name, value ast.Expr, decl ast.Node)) {
 	decl, ok := stmt.Decl.(*ast.GenDecl)
 	if !ok || decl.Tok != token.VAR {
 		return
@@ -113,7 +168,7 @@ func collectQtCVarSpecs(stmt *ast.DeclStmt, record func(name, value ast.Expr)) {
 		if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
 			continue
 		}
-		record(vs.Names[0], vs.Values[0])
+		record(vs.Names[0], vs.Values[0], stmt)
 	}
 }
 
@@ -148,23 +203,31 @@ func funcBindsObject(pass *analysis.Pass, params *ast.FieldList, obj types.Objec
 	return false
 }
 
-// enclosingBindingBody returns the body of the innermost function on stack
-// whose parameter list declares obj, or nil when no function on the stack
-// does.
-func enclosingBindingBody(pass *analysis.Pass, stack []ast.Node, obj types.Object) *ast.BlockStmt {
+// enclosingBinder returns the innermost function on stack whose parameter
+// list declares obj, together with that function's body. Both are nil when no
+// function on the stack declares it.
+//
+// Callers need both halves and they are not interchangeable. The body is
+// where a new statement goes; the whole function is what a new name must not
+// collide with. A receiver, a parameter and a named result share one scope
+// with the body, so "c := qt.New(t)" prepended to the body of
+// "func (c *harness) assert(t *testing.T)" is "no new variables on left side
+// of :=" — a name that is taken outside the body but inside the scope the
+// body writes into.
+func enclosingBinder(pass *analysis.Pass, stack []ast.Node, obj types.Object) (ast.Node, *ast.BlockStmt) {
 	for i := len(stack) - 1; i >= 0; i-- {
 		switch fn := stack[i].(type) {
 		case *ast.FuncDecl:
 			if funcBindsObject(pass, fn.Type.Params, obj) {
-				return fn.Body
+				return fn, fn.Body
 			}
 		case *ast.FuncLit:
 			if funcBindsObject(pass, fn.Type.Params, obj) {
-				return fn.Body
+				return fn, fn.Body
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // prependStmtEdit returns the edit that makes code the first statement of
