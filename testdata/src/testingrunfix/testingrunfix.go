@@ -151,6 +151,31 @@ func TestIndirectDeferWithheldByDefault(t *testing.T) {
 	})
 }
 
+// The *qt.C is followed through a var declaration as well as through :=, and
+// this is the case that pins which way round that matters. The alias only ever
+// has Assert called on it, so nothing is withheld and the site keeps its fix.
+// A rule that did not read "var cc = c" as handing the *qt.C on would see a use
+// it could not follow, treat it as reaching anything, and withhold — quietly,
+// in the safe direction, for a closure that does nothing unusual at all.
+func TestVarAliasKeepsFix(t *testing.T) {
+	c := qt.New(t)
+	c.Run("sub", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		var cc = c
+		cc.Assert(1, qt.Equals, 1)
+	})
+}
+
+// The other direction: what is reached through a var alias is reached. Defer
+// on the alias withholds the fix exactly as Defer on the parameter does.
+func TestVarAliasDeferWithheld(t *testing.T) {
+	c := qt.New(t)
+	c.Run("sub", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		var cc = c
+		cc.Defer(func() {})
+		cc.Assert(1, qt.Equals, 1)
+	})
+}
+
 // A one-line closure body: the opening brace, the statement and the closing
 // brace share a line, so the rewrite must open a line for the statement it
 // inserts instead of running the two together.
