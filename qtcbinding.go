@@ -56,6 +56,24 @@ func outermostFuncs(file *ast.File) []ast.Node {
 	return roots
 }
 
+// packageQualifies reports whether name still refers to the package imported
+// from path at pos.
+//
+// An import is a file-scope declaration, so a variable, parameter or type of
+// the same name hides it from its own declaration onwards. A rewrite that
+// writes a package qualifier has to ask at the position it writes it rather
+// than trust the file's import list, which says only that the name meant the
+// package somewhere.
+func packageQualifies(pass *analysis.Pass, name, path string, pos token.Pos) bool {
+	scope := pass.Pkg.Scope().Innermost(pos)
+	if scope == nil {
+		return false
+	}
+	_, obj := scope.LookupParent(name, pos)
+	pkgName, ok := obj.(*types.PkgName)
+	return ok && pkgName.Imported() != nil && pkgName.Imported().Path() == path
+}
+
 // inspectWithParent walks the tree rooted at root in depth-first order,
 // calling fn for every node together with the node that contains it. The
 // root's parent is nil.

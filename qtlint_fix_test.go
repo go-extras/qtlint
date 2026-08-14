@@ -68,6 +68,14 @@ func TestFixes(t *testing.T) {
 		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunalias")
 	})
 
+	// Every name the rewrite writes has to still mean what the import list
+	// says where it is written, or the site is declined.
+	t.Run("testingrunshadow", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-testing-run")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunshadow")
+	})
+
 	// With --only-stable-fixes: a closure using a test-scoped *qt.C method
 	// keeps its diagnostic and loses its fix, and the receiver it shares with
 	// a rewritten sibling keeps its declaration.
