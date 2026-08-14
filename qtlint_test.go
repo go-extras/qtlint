@@ -3,6 +3,7 @@ package qtlint_test
 import (
 	"testing"
 
+	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/analysistest"
 
 	"github.com/go-extras/qtlint"
@@ -70,4 +71,26 @@ func TestAnalyzer(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "equalsnil")
 	})
+
+	t.Run("require-qt-c-receiver patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-qt-c-receiver")
+		analysistest.Run(t, testdata, analyzer, "qtcreceiver")
+	})
+
+	// The flag gate's control: the same calls, with no want comments, run
+	// through an analyzer that was never told to enable the rule.
+	t.Run("require-qt-c-receiver is off by default", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "qtcreceiveroff")
+	})
+}
+
+// setFlag enables a boolean analyzer flag, failing the test if the flag does
+// not exist.
+func setFlag(t *testing.T, analyzer *analysis.Analyzer, name string) {
+	t.Helper()
+	if err := analyzer.Flags.Set(name, "true"); err != nil {
+		t.Fatalf("set flag %s: %v", name, err)
+	}
 }

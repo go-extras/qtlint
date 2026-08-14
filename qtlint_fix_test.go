@@ -34,4 +34,25 @@ func TestFixes(t *testing.T) {
 		}
 		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "errcheckonlystable")
 	})
+
+	t.Run("qtcreceiverfix", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-qt-c-receiver")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "qtcreceiverfix")
+	})
+
+	// Nothing this rule rewrites can change runtime behavior, so
+	// --only-stable-fixes withholds nothing: the same golden must hold.
+	t.Run("qtcreceiverfix only-stable-fixes", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-qt-c-receiver")
+		setFlag(t, analyzer, "only-stable-fixes")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "qtcreceiverfix")
+	})
+
+	t.Run("qtcreceiveralias", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-qt-c-receiver")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "qtcreceiveralias")
+	})
 }

@@ -24,6 +24,11 @@
 //   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
 //   - x, qt.Equals, nil which should be replaced with x, qt.IsNil
 //
+// It also carries house-style rules that are off unless their flag is set,
+// because both forms they choose between are correct quicktest:
+//   - -require-qt-c-receiver: qt.Assert(t, ...) / qt.Check(t, ...) which
+//     should be replaced with c.Assert(...) / c.Check(...) on a *qt.C
+//
 // This linter is designed to be used as a custom linter for golangci-lint.
 package qtlint
 
@@ -50,6 +55,12 @@ type analyzer struct {
 	// args were joined by t.Fatal's Sprintln). The diagnostic is still
 	// reported; only the auto-applicable fix is withheld.
 	onlyStableFixes bool
+
+	// requireQtCReceiver enables the opt-in house-style rule that requires
+	// assertions to go through a *qt.C receiver rather than the package-level
+	// qt.Assert(t, …) / qt.Check(t, …) form. It is off by default: both forms
+	// are correct quicktest, and which one a project wants is a style choice.
+	requireQtCReceiver bool
 }
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
@@ -65,6 +76,9 @@ func NewAnalyzer() *analysis.Analyzer {
 		"emit SuggestedFix only for diagnostics whose rewrite is reliable; "+
 			"best-effort fixes (e.g. errnil-fatal with non-literal format or "+
 			"multi-arg non-formatted call) are reported without an auto-fix")
+	aa.Flags.BoolVar(&a.requireQtCReceiver, "require-qt-c-receiver", false,
+		"house-style rule, off by default: report qt.Assert(t, ...) and "+
+			"qt.Check(t, ...) and suggest the *qt.C method form")
 	return aa
 }
 
@@ -101,7 +115,39 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		}
 	})
 
+	a.runOptInRules(pass, insp)
+
 	return nil, nil
+}
+
+// runOptInRules runs the house-style rules that are off unless their flag is
+// set. Each is skipped entirely when disabled, so the default rule set — and
+// therefore the default output — is exactly what it was before they existed.
+//
+// They need the enclosing function to decide where a *qt.C would be created,
+// which Preorder does not provide, so they get their own WithStack traversal.
+func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector) {
+	if !a.requireQtCReceiver {
+		return
+	}
+
+	nodeFilter := []ast.Node{
+		(*ast.CallExpr)(nil),
+	}
+
+	insp.WithStack(nodeFilter, func(n ast.Node, push bool, stack []ast.Node) bool {
+		if !push {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if a.requireQtCReceiver {
+			checkRequireQtCReceiver(pass, stack, call)
+		}
+		return true
+	})
 }
 
 // checkQuicktestCall checks if a call expression is a quicktest assertion
