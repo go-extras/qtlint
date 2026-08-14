@@ -141,6 +141,14 @@ type runSite struct {
 	lexParent *runSite
 	outer     *runSite
 
+	// namedAcross is set when a site nested inside this one writes a receiver
+	// bound outside it, so that this site's own parameter must not hide that
+	// receiver. keep holds the names from the source that must survive; the
+	// names this plan introduces are handled by walking the enclosing sites,
+	// whose parameters are already named by then.
+	namedAcross bool
+	keep        []string
+
 	// tName is the name the rewrite gives this site's closure parameter, and
 	// recvText what it writes in front of .Run.
 	tName    string
@@ -191,6 +199,7 @@ func (a *analyzer) planTestingRun(pass *analysis.Pass, file *ast.File, root ast.
 	}
 	plan.origins = collectQtCOrigins(pass, root)
 	plan.collect(pass, root, nil)
+	plan.nameParams(pass)
 	plan.resolve(pass, a.onlyStableFixes)
 	plan.dropInfeasible(pass)
 	return plan
@@ -213,7 +222,6 @@ func (p *runPlan) collect(pass *analysis.Pass, n ast.Node, lexParent *runSite) {
 			call:      call,
 			lexParent: lexParent,
 			outer:     bindingSite(lexParent, run.recvObj),
-			tName:     freeName("t", takenNames(run.lit, p.qtAlias, p.testingName)),
 		}
 		p.sites = append(p.sites, site)
 
@@ -234,6 +242,61 @@ func bindingSite(lexParent *runSite, obj types.Object) *runSite {
 		}
 	}
 	return nil
+}
+
+// nameParams gives every site the name its rewrite will write for the closure
+// parameter it introduces.
+//
+// A new parameter is kept clear of every identifier already inside the closure
+// it belongs to, and that is enough on its own only while each site's receiver
+// is bound by the closure directly around it. A site whose receiver is bound
+// further out writes that receiver's name across the closures in between, and
+// those closures are taking parameters of their own from this same plan. Three
+// levels of c.Run where the middle one renames its *qt.C leaves the innermost
+// site writing a "t" that the middle rewrite has just introduced, so the call
+// binds to the middle subtest instead of the outer one. Both spellings compile
+// and both pass; only the subtest's name moves, from outer/deep to
+// outer/middle/deep, and with it every -run filter aimed at it.
+//
+// Only a site that is written across is kept clear of its enclosing names. A
+// plain nest wants the shadowing — it is what lets each level of
+// t.Run(…, func(t *testing.T)) call itself t.
+//
+// Two kinds of name are written across such a site. One is the parameter an
+// enclosing site is about to introduce, which is why the sites are named
+// outermost first: an enclosing name is final before an inner one is chosen.
+// The other is a name from the source, written by a site whose receiver came
+// from a c := qt.New(t) rather than from an enclosing closure; that one is
+// known before any naming and is collected first.
+func (p *runPlan) nameParams(pass *analysis.Pass) {
+	for _, s := range p.sites {
+		if s.outer != nil {
+			for x := s.lexParent; x != nil && x != s.outer; x = x.lexParent {
+				x.namedAcross = true
+			}
+			continue
+		}
+		name, ok := targetFromQtNew(pass, p.origins, s.run)
+		if !ok {
+			continue
+		}
+		for x := s.lexParent; x != nil; x = x.lexParent {
+			x.keep = append(x.keep, name)
+		}
+	}
+
+	for _, s := range p.sites {
+		taken := takenNames(s.run.lit, p.qtAlias, p.testingName)
+		for _, name := range s.keep {
+			taken[name] = true
+		}
+		if s.namedAcross {
+			for x := s.lexParent; x != nil; x = x.lexParent {
+				taken[x.tName] = true
+			}
+		}
+		s.tName = freeName("t", taken)
+	}
 }
 
 // resolve decides which sites are reported and which of those get edits.

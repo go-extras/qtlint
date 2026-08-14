@@ -502,6 +502,19 @@ The new parameter is named `t` unless the closure already refers to something ca
 
 **Nested subtests** are rewritten as one consistent set of edits. The inner call names the parameter the outer rewrite introduces, which is resolved before the inner one is planned; applying an outer rewrite on its own would otherwise leave an inner `c.Run` whose receiver no longer exists.
 
+**A receiver bound further out than the closure the call sits in** takes one more precaution. The rewrite writes that receiver's name *across* the closures in between, and those closures are being given parameters by the same plan, so a parameter introduced in between would hide the one that was meant:
+
+```go
+c.Run("outer", func(c *qt.C) {
+    c.Run("middle", func(mid *qt.C) { // renames its own C, so c below still means "outer"
+        mid.Assert(0, qt.Equals, 0)
+        c.Run("deep", func(c *qt.C) { /* ... */ })
+    })
+})
+```
+
+Naming every closure's parameter `t` here leaves `deep` reading the *middle* subtest's `t`. The result compiles and passes, and the only thing that changes is that the subtest moves from `outer/deep` to `outer/middle/deep`, which breaks every `-run` filter and anything else keyed on test names. So a closure that a name is written across is kept clear of that name, and only such a closure is: a plain nest wants the shadowing, since that is what lets each level of `t.Run(name, func(t *testing.T))` call itself `t`. The name written across may come from the plan — an enclosing closure's new parameter — or from the source, as the `t` behind a `c := qt.New(t)` declared outside the closure in between; both are kept clear of.
+
 **A whole function is planned before any of it is reported**, because its sites decide each other's fate. Whether the receiver's declaration survives depends on which of its `c.Run` calls are actually rewritten, so a call the rule declined — one whose `t` is shadowed where the rewrite would write it, say — keeps that declaration alive for every sibling. And a nested call is declined whenever the call around it is, since rewriting it alone would attach the subtest to the parent test instead. Answering "which sites get edits" and "does the declaration survive" separately is how a declaration comes to be deleted while a declined sibling still names it.
 
 **`Defer` and `Done` are withheld whatever the flags say.** They are quicktest's deferred-execution API, and they are the one shape where this rewrite can turn a passing test into a panicking one. `(*C).Defer` registers a cleanup that panics unless `Done` has run first; `C.Run` wraps the closure it calls in `defer c2.Done()`, a bare `c := qt.New(t)` does not, and nothing in the rewritten closure would. Measured against `quicktest v1.14.6`: a subtest calling `c.Defer` passes under `c.Run` and panics with `Done not called after Defer` under `t.Run` plus `qt.New`. The diagnostic still fires; the fix does not.

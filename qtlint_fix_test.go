@@ -68,6 +68,15 @@ func TestFixes(t *testing.T) {
 		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunalias")
 	})
 
+	// A site whose receiver is bound further out than the closure it sits in
+	// writes that receiver's name across the closures in between, so those
+	// closures must not be given parameters that hide it.
+	t.Run("testingrunacross", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-testing-run")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunacross")
+	})
+
 	// Every name the rewrite writes has to still mean what the import list
 	// says where it is written, or the site is declined.
 	t.Run("testingrunshadow", func(t *testing.T) {
