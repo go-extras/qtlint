@@ -88,84 +88,130 @@ func matchQtCRun(pass *analysis.Pass, call *ast.CallExpr) (qtCRun, bool) {
 	return run, true
 }
 
-// checkRequireTestingRun reports a c.Run subtest and suggests the
+// checkRequireTestingRun reports the c.Run subtests in pass and suggests the
 // t.Run(name, func(t *testing.T) { c := qt.New(t) }) form.
-func (a *analyzer) checkRequireTestingRun(pass *analysis.Pass, stack []ast.Node, call *ast.CallExpr) {
-	run, ok := matchQtCRun(pass, call)
-	if !ok {
-		return
+//
+// It plans one outermost function at a time. Nothing smaller is a safe unit:
+// the sites within a function decide each other's fate, and every use of a
+// variable declared inside a function lies within it.
+func (a *analyzer) checkRequireTestingRun(pass *analysis.Pass) {
+	for _, file := range pass.Files {
+		for _, root := range outermostFuncs(file) {
+			a.planTestingRun(pass, file, root).report(pass)
+		}
 	}
-
-	file := enclosingFile(stack)
-	if file == nil {
-		return
-	}
-	qtAlias := importedPkgName(pass, file, quicktestPkgPath)
-	testingName := importedPkgName(pass, file, testingPkgPath)
-	if qtAlias == "" || testingName == "" {
-		return
-	}
-
-	target, ok := a.resolveRunTarget(pass, stack, run, qtAlias, testingName)
-	if !ok {
-		return
-	}
-
-	// The receiver may have had no other use, in which case its declaration
-	// goes with the rewrite.
-	edits, ok := a.unusedReceiverDeclEdits(pass, stack, run)
-	if !ok {
-		return
-	}
-
-	tName := freeName("t", takenNames(run.lit, qtAlias, testingName))
-	edits = append(edits,
-		analysis.TextEdit{
-			Pos:     run.sel.X.Pos(),
-			End:     run.sel.X.End(),
-			NewText: []byte(target.recv),
-		},
-		analysis.TextEdit{
-			Pos:     run.param.Pos(),
-			End:     run.param.End(),
-			NewText: []byte(newRunParam(run, tName, testingName)),
-		},
-	)
-
-	// The *qt.C is recreated only if the closure still needs one. A closure
-	// whose only use of it was the receiver of a nested c.Run loses that use
-	// to the nested rewrite, and a declaration with no uses does not compile.
-	if run.cObj != nil && a.survivingUses(pass, run.lit, run.cObj) > 0 {
-		edits = append(edits, prependStmtEdit(pass, run.lit.Body,
-			fmt.Sprintf("%s := %s.New(%s)", run.cName, qtAlias, tName)))
-	}
-
-	diag := analysis.Diagnostic{
-		Pos:     call.Fun.Pos(),
-		End:     call.Fun.End(),
-		Message: "qtlint: use t.Run with a per-subtest qt.New instead of c.Run",
-	}
-	unstable := target.unstable || closureUsesTestScopedMethod(pass, run)
-	if !unstable || !a.onlyStableFixes {
-		diag.SuggestedFixes = []analysis.SuggestedFix{{
-			Message:   "Replace c.Run with t.Run and a per-subtest qt.New",
-			TextEdits: edits,
-		}}
-	}
-	pass.Report(diag)
 }
 
-// runTarget is what a c.Run receiver rewrites to.
-type runTarget struct {
-	// recv is the *testing.T expression that replaces the receiver.
-	recv string
-	// unstable reports that an enclosing rewrite may change behavior. It
-	// travels inward: a nested rewrite that lands while its parent is
-	// withheld names a t that the parent has not created yet.
-	unstable bool
+// runSite is one c.Run call together with the plan's decisions about it.
+type runSite struct {
+	// run is the parsed call and call the call node itself.
+	run  qtCRun
+	call *ast.CallExpr
+
+	// lexParent is the innermost site whose closure lexically contains this
+	// one; outer is the innermost site whose closure parameter is this site's
+	// receiver. They are not the same question. A c.Run on a *qt.C that was
+	// declared inside another subtest closure has a lexical parent and no
+	// outer, and the chain has to stay walkable through it.
+	lexParent *runSite
+	outer     *runSite
+
+	// tName is the name the rewrite gives this site's closure parameter, and
+	// recvText what it writes in front of .Run.
+	tName    string
+	recvText string
+
+	// reported says the rule reports this site at all; fixed says the report
+	// carries edits. A site that is not reported is never fixed.
+	reported bool
+	fixed    bool
 }
 
-// resolveRunTarget works out what the receiver of run's Run call becomes.
+// runPlan holds the -require-testing-run decisions for every c.Run site
+// within one outermost function.
+//
+// The rule plans the whole function before it reports any of it, because the
+// decisions are not independent. Whether a receiver's declaration survives
+// depends on which of its sites are rewritten, and a nested site names a
+// parameter that exists only if its enclosing site is rewritten. Answering
+// those questions separately is how a declaration comes to be deleted while a
+// sibling site that was declined still refers to it.
+type runPlan struct {
+	// root is the function the plan covers and origins the c := qt.New(t)
+	// declarations within it.
+	root    ast.Node
+	origins map[types.Object]qtCOrigin
+
+	// qtAlias and testingName are the names the file imports the two packages
+	// under. Both are empty when the file does not import one of them under a
+	// name a new reference could use, and the plan is then empty.
+	qtAlias, testingName string
+
+	// sites is every c.Run site within root, outermost first, so that a
+	// site's enclosing decisions are already made when its own is taken.
+	sites []*runSite
+}
+
+// planTestingRun works out which c.Run sites within root the rule reports and
+// which of those receive edits.
+func (a *analyzer) planTestingRun(pass *analysis.Pass, file *ast.File, root ast.Node) *runPlan {
+	plan := &runPlan{
+		root:        root,
+		qtAlias:     importedPkgName(pass, file, quicktestPkgPath),
+		testingName: importedPkgName(pass, file, testingPkgPath),
+	}
+	if plan.qtAlias == "" || plan.testingName == "" {
+		// The rewrite has to name both packages, so there is nothing to plan.
+		return plan
+	}
+	plan.origins = collectQtCOrigins(pass, root)
+	plan.collect(pass, root, nil)
+	plan.resolve(pass, a.onlyStableFixes)
+	plan.dropInfeasible(pass)
+	return plan
+}
+
+// collect records every c.Run site within n, outermost first.
+func (p *runPlan) collect(pass *analysis.Pass, n ast.Node, lexParent *runSite) {
+	ast.Inspect(n, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		run, ok := matchQtCRun(pass, call)
+		if !ok {
+			return true
+		}
+
+		site := &runSite{
+			run:       run,
+			call:      call,
+			lexParent: lexParent,
+			outer:     bindingSite(lexParent, run.recvObj),
+			tName:     freeName("t", takenNames(run.lit, p.qtAlias, p.testingName)),
+		}
+		p.sites = append(p.sites, site)
+
+		// Descend by hand: the closure's own sites are enclosed by this one,
+		// while anything in the subtest name is a sibling of it.
+		p.collect(pass, call.Args[0], lexParent)
+		p.collect(pass, run.lit.Body, site)
+		return false
+	})
+}
+
+// bindingSite returns the innermost site on lexParent's chain whose closure
+// parameter declares obj, or nil when no enclosing closure declares it.
+func bindingSite(lexParent *runSite, obj types.Object) *runSite {
+	for s := lexParent; s != nil; s = s.lexParent {
+		if s.run.cObj != nil && s.run.cObj == obj {
+			return s
+		}
+	}
+	return nil
+}
+
+// resolve decides which sites are reported and which of those get edits.
 //
 // Two shapes reach a *testing.T. The receiver may be the *qt.C parameter of
 // an enclosing c.Run closure that this rule also rewrites, in which case it
@@ -173,98 +219,129 @@ type runTarget struct {
 // variable declared as c := qt.New(t), in which case it becomes that t.
 // Anything else — a *qt.C parameter of a helper, a struct field, a value from
 // a factory — has no statically known *testing.T, so the rule leaves it be.
-func (a *analyzer) resolveRunTarget(
-	pass *analysis.Pass,
-	stack []ast.Node,
-	run qtCRun,
-	qtAlias, testingName string,
-) (runTarget, bool) {
-	if target, ok := a.targetFromEnclosingRun(pass, stack, run, qtAlias, testingName); ok {
-		return target, true
+//
+// A nested site inherits its enclosing site's answers. Reporting one whose
+// enclosing site was declined would name a receiver that does not exist, and
+// fixing one whose enclosing site was withheld would name a parameter that
+// rewrite has not introduced.
+func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
+	for _, s := range p.sites {
+		withheld := onlyStableFixes && closureUsesTestScopedMethod(pass, s.run)
+		if s.outer != nil {
+			s.recvText = s.outer.tName
+			s.reported = s.outer.reported
+			s.fixed = s.outer.fixed && !withheld
+			continue
+		}
+		name, ok := targetFromQtNew(pass, p.origins, s.run)
+		if !ok {
+			continue
+		}
+		s.recvText = name
+		s.reported = true
+		s.fixed = !withheld
 	}
-	return targetFromQtNew(pass, stack, run)
 }
 
-// targetFromEnclosingRun handles a receiver that is the *qt.C parameter of an
-// enclosing c.Run closure. Resolving the enclosing rewrite first is what
-// makes a nest come out right: the inner call names the parameter the outer
-// rewrite introduces, so the whole nest is planned innermost-last and lands
-// as one consistent set of edits.
-func (a *analyzer) targetFromEnclosingRun(
-	pass *analysis.Pass,
-	stack []ast.Node,
-	run qtCRun,
-	qtAlias, testingName string,
-) (runTarget, bool) {
-	for i := len(stack) - 1; i > 0; i-- {
-		lit, ok := stack[i].(*ast.FuncLit)
-		if !ok {
-			continue
+// dropInfeasible withdraws the sites whose receiver declaration the plan
+// would have to remove but cannot remove cleanly. There is no correct fix for
+// such a site, and a reported site without a fix puts the repair back on the
+// author, so the rule stays quiet about it instead.
+//
+// Withdrawing a site gives its receiver a use back, which can only turn a
+// declaration that had to go into one that stays. So each round either ends
+// the loop or removes at least one site from the reported set, and sites are
+// never added back.
+func (p *runPlan) dropInfeasible(pass *analysis.Pass) {
+	for {
+		blocked := make(map[types.Object]bool)
+		for _, s := range p.sites {
+			if !s.reported || blocked[s.run.recvObj] {
+				continue
+			}
+			if _, ok := p.declEdits(pass, s.run.recvObj); !ok {
+				blocked[s.run.recvObj] = true
+			}
 		}
-		outerCall, ok := stack[i-1].(*ast.CallExpr)
-		if !ok {
-			continue
+		if len(blocked) == 0 {
+			return
 		}
-		outer, ok := matchQtCRun(pass, outerCall)
-		if !ok || outer.lit != lit || outer.cObj == nil || outer.cObj != run.recvObj {
-			continue
+		for _, s := range p.sites {
+			if blocked[s.run.recvObj] || (s.outer != nil && !s.outer.reported) {
+				s.reported, s.fixed = false, false
+			}
+			if s.outer != nil && !s.outer.fixed {
+				s.fixed = false
+			}
 		}
-		outerTarget, ok := a.resolveRunTarget(pass, stack[:i], outer, qtAlias, testingName)
-		if !ok {
-			return runTarget{}, false
-		}
-		return runTarget{
-			recv:     freeName("t", takenNames(outer.lit, qtAlias, testingName)),
-			unstable: outerTarget.unstable || closureUsesTestScopedMethod(pass, outer),
-		}, true
 	}
-	return runTarget{}, false
 }
 
-// targetFromQtNew handles a receiver declared as c := qt.New(t).
-func targetFromQtNew(pass *analysis.Pass, stack []ast.Node, run qtCRun) (runTarget, bool) {
-	root := outermostFunc(stack)
-	if root == nil {
-		return runTarget{}, false
+// report emits a diagnostic for every site the plan reports, carrying the
+// edits for those it also fixes.
+func (p *runPlan) report(pass *analysis.Pass) {
+	for _, s := range p.sites {
+		if !s.reported {
+			continue
+		}
+		diag := analysis.Diagnostic{
+			Pos:     s.call.Fun.Pos(),
+			End:     s.call.Fun.End(),
+			Message: "qtlint: use t.Run with a per-subtest qt.New instead of c.Run",
+		}
+		if edits, ok := p.edits(pass, s); s.fixed && ok {
+			diag.SuggestedFixes = []analysis.SuggestedFix{{
+				Message:   "Replace c.Run with t.Run and a per-subtest qt.New",
+				TextEdits: edits,
+			}}
+		}
+		pass.Report(diag)
 	}
-	origin, ok := collectQtCOrigins(pass, root)[run.recvObj]
+}
+
+// edits renders the rewrite of one site. It reports false when the receiver's
+// declaration cannot be removed cleanly, which dropInfeasible has already
+// withdrawn every reported site for.
+func (p *runPlan) edits(pass *analysis.Pass, s *runSite) ([]analysis.TextEdit, bool) {
+	// The receiver may have had no other use, in which case its declaration
+	// goes with the rewrite. Siblings sharing the receiver each carry the
+	// same deletion; identical edits collapse when a driver applies them.
+	edits, ok := p.declEdits(pass, s.run.recvObj)
 	if !ok {
-		return runTarget{}, false
-	}
-	tIdent, ok := origin.arg.(*ast.Ident)
-	if !ok {
-		return runTarget{}, false
-	}
-	tObj := pass.TypesInfo.Uses[tIdent]
-	if tObj == nil || !isTestingTPtr(tObj.Type()) {
-		return runTarget{}, false
+		return nil, false
 	}
 
-	// The name has to still mean that object where the rewrite writes it.
-	scope := pass.Pkg.Scope().Innermost(run.sel.Pos())
-	if scope == nil {
-		return runTarget{}, false
+	edits = append(edits,
+		analysis.TextEdit{
+			Pos:     s.run.sel.X.Pos(),
+			End:     s.run.sel.X.End(),
+			NewText: []byte(s.recvText),
+		},
+		analysis.TextEdit{
+			Pos:     s.run.param.Pos(),
+			End:     s.run.param.End(),
+			NewText: []byte(newRunParam(s.run, s.tName, p.testingName)),
+		},
+	)
+
+	// The *qt.C is recreated only if the closure still needs one. A closure
+	// whose only use of it was the receiver of a nested c.Run loses that use
+	// to the nested rewrite, and a declaration with no uses does not compile.
+	if s.run.cObj != nil && p.survivingUses(pass, s.run.lit, s.run.cObj) > 0 {
+		edits = append(edits, prependStmtEdit(pass, s.run.lit.Body,
+			fmt.Sprintf("%s := %s.New(%s)", s.run.cName, p.qtAlias, s.tName)))
 	}
-	if _, found := scope.LookupParent(tIdent.Name, run.sel.Pos()); found != tObj {
-		return runTarget{}, false
-	}
-	return runTarget{recv: tIdent.Name}, true
+	return edits, true
 }
 
-// unusedReceiverDeclEdits returns the edits that remove the receiver's
-// declaration when the rewrite takes its last use, and no edits when it does
-// not.
+// declEdits returns the edits that remove obj's declaration when the plan
+// takes its last use, and no edits when it does not.
 //
 // It reports false when the declaration has to go but cannot be removed
-// cleanly, because there is then no correct fix. The caller declines to
-// report at all rather than offer one that does not compile.
-func (a *analyzer) unusedReceiverDeclEdits(pass *analysis.Pass, stack []ast.Node, run qtCRun) ([]analysis.TextEdit, bool) {
-	root := outermostFunc(stack)
-	if root == nil {
-		return nil, true
-	}
-	origin, ok := collectQtCOrigins(pass, root)[run.recvObj]
-	if !ok || a.survivingUses(pass, root, run.recvObj) > 0 {
+// cleanly, because there is then no correct fix.
+func (p *runPlan) declEdits(pass *analysis.Pass, obj types.Object) ([]analysis.TextEdit, bool) {
+	origin, ok := p.origins[obj]
+	if !ok || p.survivingUses(pass, p.root, obj) > 0 {
 		return nil, true
 	}
 	start, end, ok := wholeLineSpan(pass, origin.decl)
@@ -274,40 +351,56 @@ func (a *analyzer) unusedReceiverDeclEdits(pass *analysis.Pass, stack []ast.Node
 	return []analysis.TextEdit{{Pos: start, End: end}}, true
 }
 
-// survivingUses counts the references to obj within root that the rewrite
-// leaves behind.
+// survivingUses counts the references to obj within root that the plan leaves
+// behind.
 //
-// A reference disappears when it is the receiver of a c.Run this rule
-// rewrites. Under -only-stable-fixes a call whose closure uses a test-scoped
-// *qt.C method keeps its fix withheld, so its receiver survives and the
-// declaration must stay.
-func (a *analyzer) survivingUses(pass *analysis.Pass, root ast.Node, obj types.Object) int {
-	rewritten := make(map[*ast.Ident]bool)
-	ast.Inspect(root, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+// A reference disappears when it is the receiver of a c.Run the plan actually
+// rewrites — not merely one this rule recognizes. A site the plan declined or
+// withheld still names its receiver, and the declaration must stay for it.
+func (p *runPlan) survivingUses(pass *analysis.Pass, root ast.Node, obj types.Object) int {
+	consumed := make(map[*ast.Ident]bool)
+	for _, s := range p.sites {
+		if s.fixed && s.run.recvObj == obj {
+			consumed[s.run.recv] = true
 		}
-		run, ok := matchQtCRun(pass, call)
-		if !ok || run.recvObj != obj {
-			return true
-		}
-		if a.onlyStableFixes && closureUsesTestScopedMethod(pass, run) {
-			return true
-		}
-		rewritten[run.recv] = true
-		return true
-	})
+	}
 
 	var count int
 	ast.Inspect(root, func(n ast.Node) bool {
 		ident, ok := n.(*ast.Ident)
-		if ok && pass.TypesInfo.Uses[ident] == obj && !rewritten[ident] {
+		if ok && pass.TypesInfo.Uses[ident] == obj && !consumed[ident] {
 			count++
 		}
 		return true
 	})
 	return count
+}
+
+// targetFromQtNew returns the name of the *testing.T behind a receiver
+// declared as c := qt.New(t).
+func targetFromQtNew(pass *analysis.Pass, origins map[types.Object]qtCOrigin, run qtCRun) (string, bool) {
+	origin, ok := origins[run.recvObj]
+	if !ok {
+		return "", false
+	}
+	tIdent, ok := origin.arg.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	tObj := pass.TypesInfo.Uses[tIdent]
+	if tObj == nil || !isTestingTPtr(tObj.Type()) {
+		return "", false
+	}
+
+	// The name has to still mean that object where the rewrite writes it.
+	scope := pass.Pkg.Scope().Innermost(run.sel.Pos())
+	if scope == nil {
+		return "", false
+	}
+	if _, found := scope.LookupParent(tIdent.Name, run.sel.Pos()); found != tObj {
+		return "", false
+	}
+	return tIdent.Name, true
 }
 
 // closureUsesTestScopedMethod reports whether run's closure calls one of the
