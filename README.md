@@ -502,13 +502,16 @@ The new parameter is named `t` unless the closure already refers to something ca
 
 **Nested subtests** are rewritten as one consistent set of edits. The inner call names the parameter the outer rewrite introduces, which is resolved before the inner one is planned; applying an outer rewrite on its own would otherwise leave an inner `c.Run` whose receiver no longer exists.
 
+**A whole function is planned before any of it is reported**, because its sites decide each other's fate. Whether the receiver's declaration survives depends on which of its `c.Run` calls are actually rewritten, so a call the rule declined — one whose `t` is shadowed where the rewrite would write it, say — keeps that declaration alive for every sibling. And a nested call is declined whenever the call around it is, since rewriting it alone would attach the subtest to the parent test instead. Answering "which sites get edits" and "does the declaration survive" separately is how a declaration comes to be deleted while a declined sibling still names it.
+
 **`-only-stable-fixes`** withholds the fix — the diagnostic still fires — when the closure calls `Cleanup`, `Parallel`, `Setenv`, `TempDir`, `Patch`, `Defer` or `Mkdir` on its own `*qt.C`. Those bind to whichever test the `*qt.C` came from, and the rewrite deliberately rebinds them to the subtest; a project relying on `c.Run`'s parent-scoped behavior would see a change. That is the one shape where this rewrite can alter what a test does, which is exactly what the flag is for. When a fix is withheld, so are the fixes for any subtests nested inside it, and the receiver's declaration is kept, because the withheld `c.Run` still uses it.
 
 The rule does not fire when:
 
 - **the subtest is a named function rather than a literal.** Its signature is `func(*qt.C)`, which `t.Run` will not accept; rewriting it means changing a declaration that may have callers elsewhere in the package or beyond it. That is out of scope, and since a reported site with no fix puts the work back on the author for a rewrite the tool declined to reason about, such a call is not reported at all;
 - **the receiver is not traceable to a `*testing.T`** — a `*qt.C` that arrived as a parameter, came out of a struct field or a factory, or was assigned again after `qt.New`. There is no name the rewrite could put in front of `.Run`;
-- **the file does not import `testing` under a usable name**, since the new parameter type has to name it.
+- **the file does not import `testing` under a usable name**, since the new parameter type has to name it;
+- **the receiver's declaration would have to go but cannot be removed cleanly** — it shares its line with other code, or carries a trailing comment the deletion would take with it. There is no correct fix for such a site, and a reported site without one puts the repair back on the author, so the rule stays quiet about it. Any subtest nested inside it is declined with it.
 
 Both packages are resolved through the type checker, so an aliased `quicktest` or `testing` import is matched and the rewrite writes whichever names the file uses.
 

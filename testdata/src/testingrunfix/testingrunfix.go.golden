@@ -123,3 +123,49 @@ func TestSingleLineBody(t *testing.T) {
 		c.Assert(1, qt.Equals, 1)
 	}) // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 }
+
+// An ordinary half-migrated file. The third subtest's receiver is the same
+// *qt.C the first one consumes, but the t it was made from is shadowed by the
+// closure the third sits in, so the rule cannot name a *testing.T for it and
+// declines it. The declaration has to stay for the site that was declined.
+func TestDeclinedSiblingKeepsDecl(t *testing.T) {
+	c := qt.New(t)
+	t.Run("first", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c := qt.New(t)
+		c.Assert(1, qt.Equals, 1)
+	})
+	t.Run("second", func(t *testing.T) {
+		c.Run("third", func(c *qt.C) {
+			c.Assert(2, qt.Equals, 2)
+		})
+	})
+}
+
+// The same shape with a helper closure that takes its own *testing.T.
+func TestDeclinedInHelperClosureKeepsDecl(t *testing.T) {
+	c := qt.New(t)
+	t.Run("first", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c := qt.New(t)
+		c.Assert(1, qt.Equals, 1)
+	})
+	run := func(t *testing.T) {
+		c.Run("second", func(c *qt.C) {
+			c.Assert(2, qt.Equals, 2)
+		})
+	}
+	run(t)
+}
+
+// The declaration carries a trailing comment, so removing its line would take
+// the comment with it: the rule declines the site rather than offer a fix
+// that loses it. The nested subtest is declined with it, because rewriting
+// the inner call alone attaches "inner" to the parent test rather than to
+// "outer" — silently, since both spellings compile.
+func TestUnremovableDeclDeclinesNest(t *testing.T) {
+	c := qt.New(t) // the checker for this test
+	c.Run("outer", func(c *qt.C) {
+		c.Run("inner", func(c *qt.C) {
+			c.Assert(1, qt.Equals, 1)
+		})
+	})
+}

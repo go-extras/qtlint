@@ -39,29 +39,21 @@ func importedPkgName(pass *analysis.Pass, file *ast.File, path string) string {
 	return ""
 }
 
-// enclosingFile returns the *ast.File at the root of an inspector stack.
-func enclosingFile(stack []ast.Node) *ast.File {
-	if len(stack) == 0 {
-		return nil
-	}
-	file, ok := stack[0].(*ast.File)
-	if !ok {
-		return nil
-	}
-	return file
-}
-
-// outermostFunc returns the outermost function declaration or literal on
-// stack. Every use of a variable declared inside a function lies within it,
-// so it bounds the search for the uses a rewrite would remove.
-func outermostFunc(stack []ast.Node) ast.Node {
-	for _, n := range stack {
+// outermostFuncs returns the function declarations and literals in file that
+// no other function contains. Every use of a variable declared inside a
+// function lies within it, so each one bounds the search for the uses a
+// rewrite would remove.
+func outermostFuncs(file *ast.File) []ast.Node {
+	var roots []ast.Node
+	ast.Inspect(file, func(n ast.Node) bool {
 		switch n.(type) {
 		case *ast.FuncDecl, *ast.FuncLit:
-			return n
+			roots = append(roots, n)
+			return false
 		}
-	}
-	return nil
+		return true
+	})
+	return roots
 }
 
 // isTestingTPtr reports whether typ is exactly *testing.T.

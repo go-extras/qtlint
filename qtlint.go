@@ -135,10 +135,15 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 // set. Each is skipped entirely when disabled, so the default rule set — and
 // therefore the default output — is exactly what it was before they existed.
 //
-// They need the enclosing function to decide where a *qt.C would be created,
-// which Preorder does not provide, so they get their own WithStack traversal.
+// -require-qt-c-receiver needs the enclosing function to decide where a *qt.C
+// would be created, which Preorder does not provide, so it gets its own
+// WithStack traversal. -require-testing-run needs a whole function at once
+// rather than one call at a time, so it walks the files itself.
 func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector) {
-	if !a.requireQtCReceiver && !a.requireTestingRun {
+	if a.requireTestingRun {
+		a.checkRequireTestingRun(pass)
+	}
+	if !a.requireQtCReceiver {
 		return
 	}
 
@@ -154,12 +159,7 @@ func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector)
 		if !ok {
 			return true
 		}
-		if a.requireQtCReceiver {
-			checkRequireQtCReceiver(pass, stack, call)
-		}
-		if a.requireTestingRun {
-			a.checkRequireTestingRun(pass, stack, call)
-		}
+		checkRequireQtCReceiver(pass, stack, call)
 		return true
 	})
 }
