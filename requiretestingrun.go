@@ -251,6 +251,9 @@ func bindingSite(lexParent *runSite, obj types.Object) *runSite {
 // rewrite has not introduced.
 func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
 	for _, s := range p.sites {
+		if !p.writesResolvableNames(pass, s.run) {
+			continue
+		}
 		reach := closureCReach(pass, s.run)
 		withheld := reach.deferred || (onlyStableFixes && reach.testScoped)
 		if s.outer != nil {
@@ -267,6 +270,34 @@ func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
 		s.reported = true
 		s.fixed = !withheld
 	}
+}
+
+// writesResolvableNames reports whether the package names this site's rewrite
+// would write still mean their packages at the positions it would write them.
+//
+// The rewrite emits three names. The receiver is checked where it is worked
+// out: targetFromQtNew insists that the *testing.T's name still means that
+// object in front of .Run, and the parameter an enclosing rewrite introduces
+// is chosen by freeName, which keeps clear of every name in that closure. The
+// other two are package qualifiers and are checked here — the testing one
+// where the new parameter type goes, the quicktest one where the inserted
+// qt.New goes.
+//
+// Neither qualifier is safe merely because the file imports it. A file can
+// import a path twice, and importedPkgName answers with the first spelling it
+// finds, which need not be the spelling that resolves at the insertion point.
+//
+// The quicktest qualifier is checked for every closure with a named *qt.C,
+// including the few that turn out not to need a qt.New at all. Which of them
+// do is settled later; declining one that would have been fine costs a fix,
+// and writing a name that means something else costs a file that does not
+// compile.
+func (p *runPlan) writesResolvableNames(pass *analysis.Pass, run qtCRun) bool {
+	if !packageQualifies(pass, p.testingName, testingPkgPath, run.param.Pos()) {
+		return false
+	}
+	return run.cObj == nil ||
+		packageQualifies(pass, p.qtAlias, quicktestPkgPath, run.lit.Body.Pos())
 }
 
 // dropInfeasible withdraws the sites whose receiver declaration the plan
