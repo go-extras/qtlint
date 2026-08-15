@@ -44,6 +44,8 @@ A second, smaller group of rules is **opt-in and off by default**. They choose b
 
 Nothing in the default rule set changes when these flags are absent.
 
+Every rule here, opt-in or not, is anchored on quicktest: each one needs a `*qt.C` or a `qt.` call to fire. A package that does not import quicktest is reported on by nothing, whatever flags are passed — `t.Run`, `t.Fatal` and the shape of a standard-library table are not this tool's business.
+
 ## Installation
 
 ### As a golangci-lint plugin
@@ -576,7 +578,7 @@ Note that this repository's own tests are written in the target form. Enabling t
 - `c := qt.New(t)` opens the closure — but only when the closure still needs a `*qt.C` after the rewrite. A closure whose sole use of it was the receiver of a nested `c.Run` loses that use, and a declaration with no uses does not compile;
 - the receiver's own `c := qt.New(t)` is removed when the rewrite takes its last use, for the same reason.
 
-The new parameter is named `t` unless the closure already refers to something called `t` — usually the enclosing test — in which case the next free name is used and that reference keeps meaning what it meant.
+The new parameter is named `t`, and it shadows the enclosing test's `t` when the closure refers to one. That is the point rather than a collision to dodge: the body is becoming a subtest, so a `t` inside it should address that subtest.
 
 **Nested subtests** are rewritten as one consistent set of edits. The inner call names the parameter the outer rewrite introduces, which is resolved before the inner one is planned; applying an outer rewrite on its own would otherwise leave an inner `c.Run` whose receiver no longer exists.
 

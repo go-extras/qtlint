@@ -65,26 +65,6 @@ func TestRowDoingSeveralThings(t *testing.T) {
 	}
 }
 
-// The handle rather than the checker is the same defect: what reaches the row
-// is still the means to assert.
-func TestRowCarriesAHandle(t *testing.T) {
-	tests := []struct {
-		name   string
-		assert func(tb testing.TB, err error) // want "qtlint: a table row carries data, not a checker; give the row the value that varies, or split the table into the tests its rows are asserting differently"
-	}{
-		{
-			name:   "row",
-			assert: func(tb testing.TB, err error) { qt.New(tb).Assert(err, qt.IsNil) },
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			test.assert(t, nil)
-		})
-	}
-}
-
 // A row field holding a function that asserts nothing is data the test builds
 // with, and is left alone. This is the control that keeps the rule from
 // reading "no function fields".

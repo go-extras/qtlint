@@ -73,25 +73,26 @@ func TestNestedOuterAsserts(t *testing.T) {
 	})
 }
 
-// Nested subtests where the outer closure names the enclosing t, so the outer
-// rewrite has to take a different parameter name. The inner call must use
-// that name: using the enclosing t instead would still compile and would
-// attach the inner subtest to the parent test rather than to "outer".
-func TestNestedRenamedOuter(t *testing.T) {
-	t.Run("outer", func(t2 *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+// Nested subtests where the outer closure names the enclosing t. The outer
+// rewrite takes that same name, so the reference becomes the outer subtest's
+// own handle, and the inner call written as t.Run attaches to "outer" because
+// that is what t means at that point.
+func TestNestedShadowedOuter(t *testing.T) {
+	t.Run("outer", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		t.Log("parent")
-		t2.Run("inner", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		t.Run("inner", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 			c := qt.New(t)
 			c.Assert(1, qt.Equals, 1)
 		})
 	})
 }
 
-// The closure already refers to the enclosing test's t, so the new parameter
-// takes a different name and that reference keeps meaning the parent.
+// The closure already refers to the enclosing test's t. The new parameter
+// takes that name anyway: the closure is becoming a subtest, and a t inside it
+// should address that subtest rather than the parent it was written against.
 func TestOuterTReferenced(t *testing.T) {
-	t.Run("sub", func(t2 *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
-		c := qt.New(t2)
+	t.Run("sub", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c := qt.New(t)
 		t.Log("parent")
 		c.Assert(1, qt.Equals, 1)
 	})
@@ -263,5 +264,43 @@ func TestSiblingsShareOneFix(t *testing.T) {
 	t.Run("second", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		c := qt.New(t)
 		c.Assert(2, qt.Equals, 2)
+	})
+}
+// A closure whose body declares t at its top level. Go declares a parameter in
+// the body block, so the rewrite's own parameter would collide with this
+// declaration rather than be shadowed by it, and the file would stop compiling.
+// The fix is withheld and the diagnostic says so; the parameter is not renamed
+// around the collision, because that would leave the t below bound to the
+// parent while the closure runs as a subtest.
+func TestBodyDeclaresT(t *testing.T) {
+	c := qt.New(t)
+	c.Run("shortdecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		t := 1
+		c.Assert(t, qt.Equals, 1)
+	})
+	c.Run("vardecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		var t = 2
+		c.Assert(t, qt.Equals, 2)
+	})
+	c.Run("constdecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		const t = 3
+		c.Assert(t, qt.Equals, 3)
+	})
+	c.Run("typedecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		type t struct{ n int }
+		c.Assert(t{n: 4}.n, qt.Equals, 4)
+	})
+}
+
+// The same name declared inside a nested block is a scope of its own and
+// shadows the parameter as usual, so this one is fixed. It is the control that
+// keeps the check above from reading "the body mentions t anywhere".
+func TestNestedBlockDeclaresT(t *testing.T) {
+	t.Run("sub", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c := qt.New(t)
+		if true {
+			t := 1
+			c.Assert(t, qt.Equals, 1)
+		}
 	})
 }

@@ -3,6 +3,7 @@ package qtlint
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
@@ -269,11 +270,18 @@ func bindingSite(lexParent *runSite, obj types.Object) *runSite {
 // nameParams gives every site the name its rewrite will write for the closure
 // parameter it introduces.
 //
-// A new parameter is kept clear of every identifier already inside the closure
-// it belongs to, and that is enough on its own only while each site's receiver
-// is bound by the closure directly around it. A site whose receiver is bound
-// further out writes that receiver's name across the closures in between, and
-// those closures are taking parameters of their own from this same plan. Three
+// The name is t, and it shadows the enclosing test's t when the closure refers
+// to one. The body is moving to the subtest, so a t inside it should address
+// that subtest; renaming the parameter around the reference leaves those calls
+// addressing the parent, which compiles and passes and is wrong.
+//
+// Shadowing is settled by Go's scoping and needs no analysis of what else is
+// in the body. The one exception is not about the body at all — it is this
+// rule's own rewrites colliding with each other.
+//
+// A site whose receiver is bound further out writes that receiver's name
+// across the closures in between, and those closures are taking parameters of
+// their own from this same plan. Three
 // levels of c.Run where the middle one renames its *qt.C leaves the innermost
 // site writing a "t" that the middle rewrite has just introduced, so the call
 // binds to the middle subtest instead of the outer one. Both spellings compile
@@ -308,7 +316,7 @@ func (p *runPlan) nameParams(pass *analysis.Pass) {
 	}
 
 	for _, s := range p.sites {
-		taken := takenNames(s.run.lit, p.qtAlias, p.testingName)
+		taken := map[string]bool{p.qtAlias: true, p.testingName: true}
 		for _, name := range s.keep {
 			taken[name] = true
 		}
@@ -343,6 +351,11 @@ func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
 		withheld := reach.deferred || (onlyStableFixes && reach.testScoped)
 		if withheld {
 			s.withheldReason = reach.withholdReason(onlyStableFixes)
+		}
+		if !withheld && bodyRedeclares(s.run, s.tName) {
+			withheld = true
+			s.withheldReason = "; no fix: the closure body already declares " + s.tName +
+				" in the scope the new parameter would occupy"
 		}
 		if s.outer != nil {
 			s.recvText = s.outer.tName
@@ -644,6 +657,89 @@ type cReach struct {
 	method string
 }
 
+// bodyRedeclares reports whether run's closure declares name directly in its
+// body block, where the new parameter would land.
+//
+// Go declares a function's parameters in the body block rather than in a scope
+// around it, so a `t := 1` written at the top of the closure does not shadow a
+// parameter named t — it collides with it, and the rewritten file stops
+// compiling. A `t` declared inside an if or a for or any nested block is a
+// scope of its own and shadows as usual, which is why only the top level of
+// the body is looked at.
+//
+// The answer is to withhold the fix, not to name the parameter around the
+// collision. Renaming it would leave every t already in the body bound to the
+// parent test while the closure runs as a subtest, which compiles and passes
+// and is the defect this rule's naming exists to avoid. A closure this rule
+// cannot convert without breaking is one an author converts by hand.
+//
+// A closure whose parameter is unnamed or blank takes no name at all, so
+// nothing can collide with it.
+func bodyRedeclares(run qtCRun, name string) bool {
+	if run.cName == "" || run.lit.Body == nil {
+		return false
+	}
+	for _, stmt := range run.lit.Body.List {
+		if declaresNameAtTopLevel(stmt, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// declaresNameAtTopLevel reports whether stmt declares name in the block it
+// sits in.
+//
+// All four spellings count, because all four put the name in the same block
+// the parameter is declared in: a short declaration, and a var, const or type
+// declaration. Measured, a const collides as loudly as a var — "t redeclared
+// in this block" — and only the := form is quiet enough to be mistaken for an
+// assignment.
+func declaresNameAtTopLevel(stmt ast.Stmt, name string) bool {
+	switch stmt := stmt.(type) {
+	case *ast.AssignStmt:
+		if stmt.Tok != token.DEFINE {
+			return false
+		}
+		for _, lhs := range stmt.Lhs {
+			if ident, ok := lhs.(*ast.Ident); ok && ident.Name == name {
+				return true
+			}
+		}
+	case *ast.DeclStmt:
+		decl, ok := stmt.Decl.(*ast.GenDecl)
+		if !ok {
+			return false
+		}
+		switch decl.Tok {
+		case token.VAR, token.CONST, token.TYPE:
+		default:
+			return false
+		}
+		for _, spec := range decl.Specs {
+			if declaresName(spec, name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// declaresName reports whether spec introduces name.
+func declaresName(spec ast.Spec, name string) bool {
+	switch spec := spec.(type) {
+	case *ast.ValueSpec:
+		for _, ident := range spec.Names {
+			if ident.Name == name {
+				return true
+			}
+		}
+	case *ast.TypeSpec:
+		return spec.Name != nil && spec.Name.Name == name
+	}
+	return false
+}
+
 // withholdReason renders why a fix was withheld, as a clause a diagnostic can
 // append to its message. It returns the empty string when nothing withholds.
 func (r cReach) withholdReason(onlyStableFixes bool) string {
@@ -819,14 +915,4 @@ func newRunParam(run qtCRun, tName, testingName string) string {
 	default:
 		return typeText
 	}
-}
-
-// takenNames returns every identifier appearing within lit, plus extra names
-// the rewrite writes and must therefore not shadow.
-func takenNames(lit *ast.FuncLit, extra ...string) map[string]bool {
-	names := identNamesIn(lit)
-	for _, name := range extra {
-		names[name] = true
-	}
-	return names
 }
