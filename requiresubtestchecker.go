@@ -126,12 +126,12 @@ func planBorrowedCheckers(pass *analysis.Pass, root ast.Node, qtAlias string) {
 		if survivingBorrowUses(pass, root, obj, sites) > 0 {
 			continue
 		}
-		edits, ok := declRemovalEdits(pass, root, obj)
-		if !ok {
+		edits, reason := declRemovalEdits(pass, root, obj)
+		if reason != "" {
 			for _, s := range sites {
 				if s.obj == obj {
 					s.fixable = false
-					s.reason = "; no fix: the checker's declaration shares its line, so removing it would take that with it"
+					s.reason = reason
 				}
 			}
 			continue
@@ -304,26 +304,45 @@ func survivingBorrowUses(pass *analysis.Pass, root ast.Node, obj types.Object, s
 	return count
 }
 
-// declRemovalEdits renders the removal of obj's declaration.
-func declRemovalEdits(pass *analysis.Pass, root ast.Node, obj types.Object) ([]analysis.TextEdit, bool) {
+// declRemovalEdits renders the removal of obj's declaration, and says why it
+// could not when it could not.
+//
+// Both spellings a checker is declared with are handled: c := qt.New(t) is an
+// assignment and var c = qt.New(t) a declaration statement. Answering only the
+// first would leave a var-declared checker reported with a cause that is not
+// its own.
+func declRemovalEdits(pass *analysis.Pass, root ast.Node, obj types.Object) ([]analysis.TextEdit, string) {
 	var decl ast.Node
 	ast.Inspect(root, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 {
-			return true
-		}
-		ident, ok := assign.Lhs[0].(*ast.Ident)
-		if ok && pass.TypesInfo.Defs[ident] == obj {
-			decl = assign
+		switch d := n.(type) {
+		case *ast.AssignStmt:
+			if len(d.Lhs) != 1 {
+				return true
+			}
+			if ident, ok := d.Lhs[0].(*ast.Ident); ok && pass.TypesInfo.Defs[ident] == obj {
+				decl = d
+			}
+		case *ast.DeclStmt:
+			gen, ok := d.Decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR || len(gen.Specs) != 1 {
+				return true
+			}
+			spec, ok := gen.Specs[0].(*ast.ValueSpec)
+			if !ok || len(spec.Names) != 1 {
+				return true
+			}
+			if pass.TypesInfo.Defs[spec.Names[0]] == obj {
+				decl = d
+			}
 		}
 		return true
 	})
 	if decl == nil {
-		return nil, false
+		return nil, "; no fix: the checker's declaration is not a shape this rule can remove, and it would be left with no reader"
 	}
 	start, end, ok := wholeLineSpan(pass, decl)
 	if !ok {
-		return nil, false
+		return nil, "; no fix: the checker's declaration shares its line, so removing it would take that with it"
 	}
-	return []analysis.TextEdit{{Pos: start, End: end}}, true
+	return []analysis.TextEdit{{Pos: start, End: end}}, ""
 }

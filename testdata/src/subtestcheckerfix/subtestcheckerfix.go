@@ -43,3 +43,12 @@ func TestBlankHandle(t *testing.T) {
 		c.Assert(1, qt.Equals, 1)
 	})
 }
+
+// A checker declared with var rather than :=. Both spellings have to be
+// removable, or a var-declared checker reports a cause that is not its own.
+func TestVarDeclaredChecker(t *testing.T) {
+	var c = qt.New(t)
+	t.Run("sub", func(t *testing.T) { // want "qtlint: this subtest asserts through a \\*qt.C built from the test around it, so a failure names that test instead"
+		c.Assert(1, qt.Equals, 1)
+	})
+}

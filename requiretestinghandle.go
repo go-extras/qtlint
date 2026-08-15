@@ -194,43 +194,46 @@ func reportQtCHelper(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExp
 		Message: qtCHelperMessage,
 	}
 
-	edits, ok := qtCHelperEdits(pass, helper, calls)
-	if ok {
+	edits, reason := qtCHelperEdits(pass, helper, calls)
+	if reason == "" {
 		diag.SuggestedFixes = []analysis.SuggestedFix{{
 			Message:   "Take testing.TB and build the *qt.C from it",
 			TextEdits: edits,
 		}}
 	} else {
-		diag.Message += "; no fix: the qualifiers the rewrite would write do not mean their packages where it would write them"
+		diag.Message += reason
 	}
 	pass.Report(diag)
 }
 
 // qtCHelperEdits renders the declaration change, the qt.New the body needs,
 // and one edit per call site.
-func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr) ([]analysis.TextEdit, bool) {
+func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr) ([]analysis.TextEdit, string) {
 	file := fileHolding(pass, helper.decl.Pos())
 	if file == nil {
-		return nil, false
+		return nil, "; no fix: this rule could not find the file the declaration is in"
 	}
 	testingName := importedPkgName(pass, file, testingPkgPath)
 	qtAlias := importedPkgName(pass, file, quicktestPkgPath)
-	if testingName == "" || qtAlias == "" {
-		return nil, false
+	if testingName == "" {
+		return nil, "; no fix: this file does not import testing under a name the new parameter type could use"
+	}
+	if qtAlias == "" {
+		return nil, "; no fix: this file does not import quicktest under a name the inserted qt.New could use"
 	}
 	// Both qualifiers are written into the declaration's own file, so both
 	// have to mean their packages there. A file can import a path twice.
 	if !packageQualifies(pass, testingName, testingPkgPath, helper.param.Pos()) {
-		return nil, false
+		return nil, "; no fix: the testing qualifier does not mean testing where the new parameter type would go"
 	}
 	if !packageQualifies(pass, qtAlias, quicktestPkgPath, helper.decl.Body.Lbrace) {
-		return nil, false
+		return nil, "; no fix: the quicktest qualifier does not mean quicktest where the qt.New would go"
 	}
 
 	callEdits := make([]analysis.TextEdit, 0, len(calls))
 	for _, call := range calls {
 		if helper.index >= len(call.Args) {
-			return nil, false
+			return nil, "; no fix: a call passes fewer arguments than the signature declares, so this rule cannot say which one is the checker"
 		}
 		arg := call.Args[helper.index]
 		callEdits = append(callEdits, analysis.TextEdit{
@@ -248,7 +251,7 @@ func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr
 			Pos:     helper.param.Pos(),
 			End:     helper.param.End(),
 			NewText: []byte(testingName + ".TB"),
-		}}, callEdits...), true
+		}}, callEdits...), ""
 	}
 
 	// A blank parameter keeps its blank name for the same reason, and has no
@@ -258,7 +261,7 @@ func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr
 			Pos:     helper.param.Pos(),
 			End:     helper.param.End(),
 			NewText: []byte("_ " + testingName + ".TB"),
-		}}, callEdits...), true
+		}}, callEdits...), ""
 	}
 
 	// The handle takes a name of its own rather than reusing the checker's, so
@@ -279,7 +282,7 @@ func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr
 			fmt.Sprintf("%s := %s.New(%s)", helper.name, qtAlias, tbName)))
 	}
 
-	return append(edits, callEdits...), true
+	return append(edits, callEdits...), ""
 }
 
 // usesObject reports whether obj is read anywhere inside root.

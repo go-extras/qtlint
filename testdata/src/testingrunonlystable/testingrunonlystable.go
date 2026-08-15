@@ -120,3 +120,15 @@ func TestWithholdingNamesItsCause(t *testing.T) {
 		c.Done()
 	})
 }
+
+// The -only-stable-fixes branch of the explanation. A test-scoped method is
+// not a correctness hazard the way Defer is, so the clause names the flag that
+// withheld the fix rather than a panic that would not happen.
+func TestOnlyStableFixesNamesTheFlag(t *testing.T) {
+	c := qt.New(t)
+
+	c.Run("cleanup", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure calls c.Cleanup, which binds to whichever test the \\*qt.C came from"
+		c.Cleanup(func() {})
+		c.Assert(1, qt.Equals, 1)
+	})
+}
