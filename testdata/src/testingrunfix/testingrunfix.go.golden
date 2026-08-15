@@ -266,3 +266,33 @@ func TestSiblingsShareOneFix(t *testing.T) {
 		c.Assert(2, qt.Equals, 2)
 	})
 }
+// A closure whose body declares t at its top level. Go declares a parameter in
+// the body block, so the rewrite's own parameter would collide with this
+// declaration rather than be shadowed by it, and the file would stop compiling.
+// The fix is withheld and the diagnostic says so; the parameter is not renamed
+// around the collision, because that would leave the t below bound to the
+// parent while the closure runs as a subtest.
+func TestBodyDeclaresT(t *testing.T) {
+	c := qt.New(t)
+	c.Run("shortdecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		t := 1
+		c.Assert(t, qt.Equals, 1)
+	})
+	c.Run("vardecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		var t = 2
+		c.Assert(t, qt.Equals, 2)
+	})
+}
+
+// The same name declared inside a nested block is a scope of its own and
+// shadows the parameter as usual, so this one is fixed. It is the control that
+// keeps the check above from reading "the body mentions t anywhere".
+func TestNestedBlockDeclaresT(t *testing.T) {
+	t.Run("sub", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c := qt.New(t)
+		if true {
+			t := 1
+			c.Assert(t, qt.Equals, 1)
+		}
+	})
+}

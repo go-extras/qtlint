@@ -3,6 +3,7 @@ package qtlint
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 
 	"golang.org/x/tools/go/analysis"
@@ -351,6 +352,11 @@ func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
 		if withheld {
 			s.withheldReason = reach.withholdReason(onlyStableFixes)
 		}
+		if !withheld && bodyRedeclares(s.run, s.tName) {
+			withheld = true
+			s.withheldReason = "; no fix: the closure body already declares " + s.tName +
+				" in the scope the new parameter would occupy"
+		}
 		if s.outer != nil {
 			s.recvText = s.outer.tName
 			s.reported = s.outer.reported
@@ -649,6 +655,69 @@ type cReach struct {
 	// one the rule could not see through.
 	escape string
 	method string
+}
+
+// bodyRedeclares reports whether run's closure declares name directly in its
+// body block, where the new parameter would land.
+//
+// Go declares a function's parameters in the body block rather than in a scope
+// around it, so a `t := 1` written at the top of the closure does not shadow a
+// parameter named t — it collides with it, and the rewritten file stops
+// compiling. A `t` declared inside an if or a for or any nested block is a
+// scope of its own and shadows as usual, which is why only the top level of
+// the body is looked at.
+//
+// The answer is to withhold the fix, not to name the parameter around the
+// collision. Renaming it would leave every t already in the body bound to the
+// parent test while the closure runs as a subtest, which compiles and passes
+// and is the defect this rule's naming exists to avoid. A closure this rule
+// cannot convert without breaking is one an author converts by hand.
+//
+// A closure whose parameter is unnamed or blank takes no name at all, so
+// nothing can collide with it.
+func bodyRedeclares(run qtCRun, name string) bool {
+	if run.cName == "" || run.lit.Body == nil {
+		return false
+	}
+	for _, stmt := range run.lit.Body.List {
+		if declaresNameAtTopLevel(stmt, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// declaresNameAtTopLevel reports whether stmt declares name in the block it
+// sits in, through := or through var.
+func declaresNameAtTopLevel(stmt ast.Stmt, name string) bool {
+	switch stmt := stmt.(type) {
+	case *ast.AssignStmt:
+		if stmt.Tok != token.DEFINE {
+			return false
+		}
+		for _, lhs := range stmt.Lhs {
+			if ident, ok := lhs.(*ast.Ident); ok && ident.Name == name {
+				return true
+			}
+		}
+	case *ast.DeclStmt:
+		decl, ok := stmt.Decl.(*ast.GenDecl)
+		if !ok || decl.Tok != token.VAR {
+			return false
+		}
+		for _, spec := range decl.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, ident := range value.Names {
+				if ident.Name == name {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // withholdReason renders why a fix was withheld, as a clause a diagnostic can
