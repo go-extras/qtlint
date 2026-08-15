@@ -98,6 +98,16 @@ func TestFixes(t *testing.T) {
 	// A subtest asserting through the checker of the test around it. Neither
 	// other rule sees the shape: there is no c.Run to rewrite and the
 	// assertion already goes through a receiver.
+	// Both opt-in rules in one pass, on a receiver they both reach. Each plans
+	// against the same declaration; one would remove it and the other writes a
+	// use of it.
+	t.Run("both rules", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-testing-run")
+		setFlag(t, analyzer, "require-qt-c-receiver")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "bothrulesfix")
+	})
+
 	t.Run("subtestchecker", func(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		setFlag(t, analyzer, "require-subtest-checker")

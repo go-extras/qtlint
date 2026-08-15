@@ -192,6 +192,10 @@ type runPlan struct {
 	root    ast.Node
 	origins map[types.Object]qtCOrigin
 
+	// requireQtCReceiver says the other opt-in rule is enabled in the same
+	// run, so this plan has to account for the uses it will write.
+	requireQtCReceiver bool
+
 	// qtAlias and testingName are the names the file imports the two packages
 	// under. Both are empty when the file does not import one of them under a
 	// name a new reference could use, and the plan is then empty.
@@ -206,9 +210,10 @@ type runPlan struct {
 // which of those receive edits.
 func (a *analyzer) planTestingRun(pass *analysis.Pass, file *ast.File, root ast.Node) *runPlan {
 	plan := &runPlan{
-		root:        root,
-		qtAlias:     importedPkgName(pass, file, quicktestPkgPath),
-		testingName: importedPkgName(pass, file, testingPkgPath),
+		root:               root,
+		requireQtCReceiver: a.requireQtCReceiver,
+		qtAlias:            importedPkgName(pass, file, quicktestPkgPath),
+		testingName:        importedPkgName(pass, file, testingPkgPath),
 	}
 	if plan.qtAlias == "" || plan.testingName == "" {
 		// The rewrite has to name both packages, so there is nothing to plan.
@@ -447,25 +452,46 @@ func (p *runPlan) report(pass *analysis.Pass) {
 // withdrawn every reported site for.
 func (p *runPlan) edits(pass *analysis.Pass, s *runSite) ([]analysis.TextEdit, bool) {
 	// The receiver may have had no other use, in which case its declaration
-	// goes with the rewrite. Siblings sharing the receiver each carry the
-	// same deletion; identical edits collapse when a driver applies them.
+	// goes with the rewrite.
 	edits, ok := p.declEdits(pass, s.run.recvObj)
 	if !ok {
 		return nil, false
 	}
 
-	edits = append(edits,
-		analysis.TextEdit{
+	// Every site sharing this receiver is rewritten by this one fix, not only
+	// the site the diagnostic sits on.
+	//
+	// A SuggestedFix is the unit an editor applies. Carrying the declaration's
+	// deletion in each sibling's fix separately is correct only for a driver
+	// that applies all of them: accept one code action in gopls and the
+	// declaration goes while the siblings that still name it stay, which does
+	// not compile. Making each fix convert the whole group leaves every one of
+	// them self-contained, and the group's fixes are then identical, so a
+	// driver applying all of them collapses the duplicates exactly as before.
+	for _, sibling := range p.sites {
+		if !sibling.fixed || sibling.run.recvObj != s.run.recvObj {
+			continue
+		}
+		edits = append(edits, p.siteEdits(pass, sibling)...)
+	}
+	return edits, true
+}
+
+// siteEdits renders the rewrite of one site, without the declaration removal
+// the whole group shares.
+func (p *runPlan) siteEdits(pass *analysis.Pass, s *runSite) []analysis.TextEdit {
+	edits := []analysis.TextEdit{
+		{
 			Pos:     s.run.sel.X.Pos(),
 			End:     s.run.sel.X.End(),
 			NewText: []byte(s.recvText),
 		},
-		analysis.TextEdit{
+		{
 			Pos:     s.run.param.Pos(),
 			End:     s.run.param.End(),
 			NewText: []byte(newRunParam(s.run, s.tName, p.testingName)),
 		},
-	)
+	}
 
 	// The *qt.C is recreated only if the closure still needs one. A closure
 	// whose only use of it was the receiver of a nested c.Run loses that use
@@ -474,7 +500,7 @@ func (p *runPlan) edits(pass *analysis.Pass, s *runSite) ([]analysis.TextEdit, b
 		edits = append(edits, prependStmtEdit(pass, s.run.lit.Body,
 			fmt.Sprintf("%s := %s.New(%s)", s.run.cName, p.qtAlias, s.tName)))
 	}
-	return edits, true
+	return edits
 }
 
 // declEdits returns the edits that remove obj's declaration when the plan
@@ -484,7 +510,7 @@ func (p *runPlan) edits(pass *analysis.Pass, s *runSite) ([]analysis.TextEdit, b
 // cleanly, because there is then no correct fix.
 func (p *runPlan) declEdits(pass *analysis.Pass, obj types.Object) ([]analysis.TextEdit, bool) {
 	origin, ok := p.origins[obj]
-	if !ok || p.survivingUses(pass, p.root, obj) > 0 {
+	if !ok || p.survivingUses(pass, p.root, obj) > 0 || p.receiverRuleWillUse(pass, obj) {
 		return nil, true
 	}
 	start, end, ok := wholeLineSpan(pass, origin.decl)
@@ -517,6 +543,58 @@ func (p *runPlan) survivingUses(pass *analysis.Pass, root ast.Node, obj types.Ob
 		return true
 	})
 	return count
+}
+
+// receiverRuleWillUse reports whether -require-qt-c-receiver, when it is also
+// enabled, would rewrite a package-level assertion in this function into a use
+// of obj.
+//
+// The two rules plan against the same receiver. This one deletes a declaration
+// whose last use it consumed; the other turns qt.Assert(t, …) into
+// c.Assert(…), which is a use of exactly that declaration. Neither is wrong
+// alone, and applied together on a receiver whose only other use was the
+// c.Run they produce a file that does not compile.
+//
+// So the deletion asks the other rule what it is about to write. The answer is
+// conservative in the safe direction: a declaration kept when nothing ends up
+// using it is a lint finding, and one removed while something does is a build
+// failure.
+func (p *runPlan) receiverRuleWillUse(pass *analysis.Pass, obj types.Object) bool {
+	if !p.requireQtCReceiver {
+		return false
+	}
+	origin, ok := p.origins[obj]
+	if !ok {
+		return false
+	}
+	tIdent, ok := origin.arg.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	tObj := pass.TypesInfo.Uses[tIdent]
+	if tObj == nil {
+		return false
+	}
+
+	found := false
+	ast.Inspect(p.root, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		assertion, ok := matchPackageLevelAssertion(pass, call)
+		if !ok {
+			return true
+		}
+		// Only an assertion the other rule would bind to THIS receiver
+		// matters: it rewrites qt.Assert(t, …) into a use of the *qt.C built
+		// from that same t.
+		if assertion.tObj == tObj {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // targetFromQtNew returns the name of the *testing.T behind a receiver

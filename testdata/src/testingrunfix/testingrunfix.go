@@ -241,3 +241,19 @@ func TestUnremovableDeclDeclinesNest(t *testing.T) {
 		})
 	})
 }
+
+// Two subtests sharing one receiver whose declaration goes with them.
+//
+// Each site's fix carries the whole group, not only its own edits. A
+// SuggestedFix is the unit an editor applies, so a fix that deleted the
+// declaration and rewrote one site would leave the sibling naming a
+// declaration that is gone — accepted alone in gopls, that does not compile.
+func TestSiblingsShareOneFix(t *testing.T) {
+	c := qt.New(t)
+	c.Run("first", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Assert(1, qt.Equals, 1)
+	})
+	c.Run("second", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Assert(2, qt.Equals, 2)
+	})
+}
