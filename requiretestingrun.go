@@ -688,7 +688,13 @@ func bodyRedeclares(run qtCRun, name string) bool {
 }
 
 // declaresNameAtTopLevel reports whether stmt declares name in the block it
-// sits in, through := or through var.
+// sits in.
+//
+// All four spellings count, because all four put the name in the same block
+// the parameter is declared in: a short declaration, and a var, const or type
+// declaration. Measured, a const collides as loudly as a var — "t redeclared
+// in this block" — and only the := form is quiet enough to be mistaken for an
+// assignment.
 func declaresNameAtTopLevel(stmt ast.Stmt, name string) bool {
 	switch stmt := stmt.(type) {
 	case *ast.AssignStmt:
@@ -702,20 +708,34 @@ func declaresNameAtTopLevel(stmt ast.Stmt, name string) bool {
 		}
 	case *ast.DeclStmt:
 		decl, ok := stmt.Decl.(*ast.GenDecl)
-		if !ok || decl.Tok != token.VAR {
+		if !ok {
+			return false
+		}
+		switch decl.Tok {
+		case token.VAR, token.CONST, token.TYPE:
+		default:
 			return false
 		}
 		for _, spec := range decl.Specs {
-			value, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			for _, ident := range value.Names {
-				if ident.Name == name {
-					return true
-				}
+			if declaresName(spec, name) {
+				return true
 			}
 		}
+	}
+	return false
+}
+
+// declaresName reports whether spec introduces name.
+func declaresName(spec ast.Spec, name string) bool {
+	switch spec := spec.(type) {
+	case *ast.ValueSpec:
+		for _, ident := range spec.Names {
+			if ident.Name == name {
+				return true
+			}
+		}
+	case *ast.TypeSpec:
+		return spec.Name != nil && spec.Name.Name == name
 	}
 	return false
 }

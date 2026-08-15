@@ -275,6 +275,14 @@ func TestBodyDeclaresT(t *testing.T) {
 		var t = 2
 		c.Assert(t, qt.Equals, 2)
 	})
+	c.Run("constdecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		const t = 3
+		c.Assert(t, qt.Equals, 3)
+	})
+	c.Run("typedecl", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure body already declares t in the scope the new parameter would occupy"
+		type t struct{ n int }
+		c.Assert(t{n: 4}.n, qt.Equals, 4)
+	})
 }
 
 // The same name declared inside a nested block is a scope of its own and
