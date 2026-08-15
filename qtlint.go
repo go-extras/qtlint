@@ -72,10 +72,6 @@ type analyzer struct {
 	// a legitimate quicktest API and some projects prefer it.
 	requireTestingRun bool
 
-	// requireTestingHandle enables the opt-in house-style rule that requires
-	// a test helper to take testing.TB rather than *qt.C.
-	requireTestingHandle bool
-
 	// requireSubtestChecker enables the opt-in house-style rule that requires
 	// a subtest to assert through its own *qt.C.
 	requireSubtestChecker bool
@@ -105,8 +101,6 @@ func NewAnalyzer() *analysis.Analyzer {
 		"report a table-row func field whose every row holds one assertion (opt-in)")
 	aa.Flags.BoolVar(&a.requireSubtestChecker, "require-subtest-checker", false,
 		"report a subtest that asserts through the enclosing test's *qt.C (opt-in)")
-	aa.Flags.BoolVar(&a.requireTestingHandle, "require-testing-handle", false,
-		"report a test helper that takes a *qt.C and suggest testing.TB (opt-in)")
 	aa.Flags.BoolVar(&a.requireTestingRun, "require-testing-run", false,
 		"house-style rule, off by default: report c.Run(...) subtests and "+
 			"suggest t.Run(name, func(t *testing.T)) with a per-subtest qt.New")
@@ -202,9 +196,6 @@ func inSourceOrder(pass *analysis.Pass, rules func()) {
 // WithStack traversal. -require-testing-run needs a whole function at once
 // rather than one call at a time, so it walks the files itself.
 func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector) {
-	if a.requireTestingHandle {
-		a.checkRequireTestingHandle(pass)
-	}
 	if a.requireSubtestChecker {
 		a.checkRequireSubtestChecker(pass)
 	}
