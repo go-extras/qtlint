@@ -62,6 +62,22 @@ func newCalleeReach(pass *analysis.Pass) *calleeReach {
 // returned for every shape whose binding is not a plain parameter of a
 // package-level function this pass can read.
 func (r *calleeReach) follow(call *ast.CallExpr, index int) (cReach, bool) {
+	// A parameter that is not a *qt.C answers the question by its type alone.
+	//
+	// Defer and Done are C's own methods. A callee that receives the checker as
+	// a testing.TB -- or as any interface C satisfies -- cannot name them, so
+	// the hazard this rule guards is unreachable there whatever the body does,
+	// and the body does not have to be readable for that to hold. It closes the
+	// shapes no body-reading can: a function value in a struct field, a
+	// parameter of a callee from another package, a locally bound closure.
+	//
+	// The test-scoped methods are a different matter and stay conservative:
+	// Cleanup, TempDir, Setenv and the rest belong to testing.TB itself, so a
+	// TB-typed parameter reaches them and -only-stable-fixes must still say so.
+	if param, ok := r.paramTypeAt(call, index); ok && !isQuicktestCType(param) {
+		return cReach{testScoped: true, handedOn: true}, true
+	}
+
 	ident, ok := stripParens(call.Fun).(*ast.Ident)
 	if !ok {
 		return cReach{}, false
@@ -184,6 +200,7 @@ func (r *calleeReach) bodyReach(fn *ast.FuncDecl, paramObj types.Object) (cReach
 func (r *cReach) merge(other cReach) {
 	r.deferred = r.deferred || other.deferred
 	r.testScoped = r.testScoped || other.testScoped
+	r.handedOn = r.handedOn || other.handedOn
 	if r.method == "" {
 		r.method = other.method
 	}
@@ -256,4 +273,28 @@ func followedCallReach(callees *calleeReach, parent ast.Node, ident *ast.Ident) 
 		return cReach{}, false
 	}
 	return callees.follow(call, index)
+}
+
+// paramTypeAt returns the declared type of the parameter the argument at index
+// binds to, and false when the callee has no signature or the position runs
+// into a variadic tail.
+func (r *calleeReach) paramTypeAt(call *ast.CallExpr, index int) (types.Type, bool) {
+	typ := r.pass.TypesInfo.TypeOf(call.Fun)
+	if typ == nil {
+		return nil, false
+	}
+	sig, ok := types.Unalias(typ).(*types.Signature)
+	if !ok {
+		return nil, false
+	}
+	params := sig.Params()
+	if params == nil || index >= params.Len() {
+		return nil, false
+	}
+	if sig.Variadic() && index >= params.Len()-1 {
+		// Packed into a slice, so the parameter's declared type is not what the
+		// argument binds to.
+		return nil, false
+	}
+	return params.At(index).Type(), true
 }

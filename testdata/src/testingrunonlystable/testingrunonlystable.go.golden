@@ -137,6 +137,15 @@ func TestWithholdingNamesItsCause(t *testing.T) {
 		c.Assert(opaqueHolder{}.take(c), qt.Not(qt.Equals), "")
 	})
 
+	c.Run("handle helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure hands its \\*qt.C to a parameter that is not one, so what it can reach there is testing.TB's own methods, which bind to whichever test the \\*qt.C came from"
+		c.Assert(handleHelper(c), qt.Equals, "x")
+	})
+
+	c.Run("handle through a function value", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure hands its \\*qt.C to a parameter that is not one, so what it can reach there is testing.TB's own methods, which bind to whichever test the \\*qt.C came from"
+		holder := opaqueHandleHolder{take: handleHelper}
+		c.Assert(holder.take(c), qt.Equals, "x")
+	})
+
 	t.Run("plain helper", func(t *testing.T) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		c := qt.New(t)
 		c.Assert(plainHelper(c), qt.Equals, "x")
@@ -158,4 +167,18 @@ func TestOnlyStableFixesNamesTheFlag(t *testing.T) {
 		c.Cleanup(func() {})
 		c.Assert(1, qt.Equals, 1)
 	})
+}
+
+// handleHelper takes something that is not a checker.
+//
+// The parameter is `any` rather than testing.TB only because this package's
+// quicktest carries TB as a field rather than embedding it; the rule turns on
+// the parameter not being a *qt.C, which is what makes (*qt.C).Defer
+// unnameable inside whatever it is.
+func handleHelper(handle any) string { return "x" }
+
+// opaqueHandleHolder hands the checker to a function value, which no
+// body-reading can follow -- and does not need to, for the same reason.
+type opaqueHandleHolder struct {
+	take func(handle any) string
 }
