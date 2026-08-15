@@ -109,6 +109,10 @@ qtlint -fix -only-stable-fixes ./...
 qtlint -require-qt-c-receiver ./...
 qtlint -fix -require-qt-c-receiver ./...
 qtlint -fix -require-testing-run ./...
+
+# Include packages and files behind a build constraint
+qtlint -tags integration ./...
+qtlint -tags integration,e2e ./...
 ```
 
 ### With golangci-lint
@@ -126,6 +130,24 @@ Then run with auto-fix:
 ```bash
 golangci-lint run --fix
 ```
+
+### `-tags` flag
+
+Go source behind a build constraint is not part of the default build, so `qtlint ./...` does not see it. Pass `-tags` to name the constraints to satisfy, exactly as you would to `go build`:
+
+```bash
+qtlint -tags integration ./...        # one tag
+qtlint -tags integration,e2e ./...    # several, comma separated
+qtlint -tags 'integration e2e' ./...  # the older space separated spelling
+```
+
+Both multi-value spellings are accepted because the `go` command accepts both, and a repeated `-tags` replaces the previous value rather than adding to it — again matching `go build`.
+
+This matters most on a recursive pattern. A package whose files are all excluded by a build constraint is not an error, it is simply absent, so without `-tags` the command reports nothing about it and still exits 0. Tagged test files sitting next to untagged source disappear the same way, and just as quietly.
+
+Note for anyone who reached for `go vet` instead: `go vet -tags integration -vettool=$(which qtlint) ./...` has always worked, because in that mode `go vet` loads the packages itself. It is still supported and reports the same diagnostics; you no longer need it just to get build tags.
+
+One limitation: `-tags` is forwarded through `GOFLAGS` to the `go` command that loads the packages. A custom `GOPACKAGESDRIVER` does not run the `go` command and so will not see it.
 
 ### `-only-stable-fixes` flag
 
