@@ -79,6 +79,10 @@ type analyzer struct {
 	// requireSubtestChecker enables the opt-in house-style rule that requires
 	// a subtest to assert through its own *qt.C.
 	requireSubtestChecker bool
+
+	// requireDataRows enables the opt-in house-style rule that refuses a
+	// table-row function field whose every row holds one assertion.
+	requireDataRows bool
 }
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
@@ -97,6 +101,8 @@ func NewAnalyzer() *analysis.Analyzer {
 	aa.Flags.BoolVar(&a.requireQtCReceiver, "require-qt-c-receiver", false,
 		"house-style rule, off by default: report qt.Assert(t, ...) and "+
 			"qt.Check(t, ...) and suggest the *qt.C method form")
+	aa.Flags.BoolVar(&a.requireDataRows, "require-data-rows", false,
+		"report a table-row func field whose every row holds one assertion (opt-in)")
 	aa.Flags.BoolVar(&a.requireSubtestChecker, "require-subtest-checker", false,
 		"report a subtest that asserts through the enclosing test's *qt.C (opt-in)")
 	aa.Flags.BoolVar(&a.requireTestingHandle, "require-testing-handle", false,
@@ -201,6 +207,9 @@ func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector)
 	}
 	if a.requireSubtestChecker {
 		a.checkRequireSubtestChecker(pass)
+	}
+	if a.requireDataRows {
+		a.checkRequireDataRows(pass)
 	}
 	if a.requireTestingRun {
 		a.checkRequireTestingRun(pass)

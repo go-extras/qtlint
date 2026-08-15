@@ -22,6 +22,15 @@ func TestAnalyzer(t *testing.T) {
 		analysistest.Run(t, testdata, analyzer, "a")
 	})
 
+	// A table-row function field whose every row holds one assertion, and the
+	// three shapes that are not it: a row doing two things, a row calling a
+	// helper, and a table of one row.
+	t.Run("data rows", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-data-rows")
+		analysistest.Run(t, testdata, analyzer, "datarows")
+	})
+
 	t.Run("method calls", func(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "b")
