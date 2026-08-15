@@ -113,6 +113,10 @@ qtlint -fix -require-testing-run ./...
 # Include packages and files behind a build constraint
 qtlint -tags integration ./...
 qtlint -tags integration,e2e ./...
+
+# Cover every module in a repository, not just the one you are standing in
+qtlint -multi-module ./...
+qtlint -multi-module -tags integration ./...
 ```
 
 ### With golangci-lint
@@ -131,6 +135,8 @@ Then run with auto-fix:
 golangci-lint run --fix
 ```
 
+Note that multi-module repositories are a `golangci-lint` concern in this mode rather than a qtlint one: `golangci-lint` runs inside a single module and has no equivalent of `-multi-module` ([golangci-lint#828](https://github.com/golangci/golangci-lint/issues/828) is open at the time of writing), so it is invoked once per module — by hand, or with `automatic-module-directories` in the official GitHub Action. Use the standalone command with `-multi-module` if you want one invocation to cover the whole repository.
+
 ### `-tags` flag
 
 Go source behind a build constraint is not part of the default build, so `qtlint ./...` does not see it. Pass `-tags` to name the constraints to satisfy, exactly as you would to `go build`:
@@ -148,6 +154,56 @@ This matters most on a recursive pattern. A package whose files are all excluded
 Note for anyone who reached for `go vet` instead: `go vet -tags integration -vettool=$(which qtlint) ./...` has always worked, because in that mode `go vet` loads the packages itself. It is still supported and reports the same diagnostics; you no longer need it just to get build tags.
 
 One limitation: `-tags` is forwarded through `GOFLAGS` to the `go` command that loads the packages. A custom `GOPACKAGESDRIVER` does not run the `go` command and so will not see it.
+
+### `-multi-module` flag
+
+`qtlint ./...` analyzes exactly one module: the one holding the working directory. Packages in any other module are not reported as missing, they are simply not there, so a repository of several modules can be linted for months while most of it is never inspected.
+
+This is not a qtlint limitation but a `go` one. `go/packages` resolves patterns by running the `go` command, and the `go` command resolves them against the main module, so a pattern naming a different module is an error rather than a wider search:
+
+```console
+$ qtlint ./testkit/...
+pattern ./testkit/...: directory prefix testkit does not contain main module or its selected dependencies
+```
+
+No spelling avoids it — an absolute path reports the same error, and naming the directory without `...` reports that the main module does not contain that package. A Go workspace does not fix it either: with a `go.work` listing every module, `./testkit/...` starts working, but `./...` still matches only the module you are standing in, so you are still the one enumerating modules.
+
+Pass `-multi-module` and one invocation covers them all:
+
+```bash
+qtlint -multi-module ./...              # every module under the current directory
+qtlint -multi-module ./services/...     # every module under services/
+qtlint -multi-module -fix ./...         # fixes apply in each module
+```
+
+The flag finds every `go.mod` at or under the directories you named, then runs the linter once per module with the working directory set to it. Modules are found rather than listed, so a module added to the repository next month is covered without anyone remembering to add it.
+
+Directories the `go` command ignores when expanding `...` are ignored here too: `vendor`, `testdata`, and any directory whose name begins with `.` or `_`. A repository whose top level holds no `go.mod` at all works — every module comes from the downward search.
+
+**Exit codes** are the driver's own, aggregated so that the worst news wins:
+
+| Exit | Meaning |
+| ---- | ------- |
+| `0`  | every module was analyzed and none reported anything |
+| `3`  | some module reported diagnostics |
+| other | some module could not be analyzed — a load or configuration failure |
+
+A module that fails to load outranks one with diagnostics, because its packages were never inspected and calling that a mere finding would describe work that did not happen. A clean module can never bring the invocation back to `0`. As without the flag, `-json` reports diagnostics in the document and still exits `0`.
+
+**Paths in diagnostics are absolute**, which is what they already were without the flag. Relative paths would be the ambiguous choice here rather than the friendly one: each module is analyzed from its own working directory, so `sub/thing_test.go` would mean a different file depending on which module produced it. `golangci-lint` reached the same conclusion from the other direction — it reports relative paths and added an absolute-path mode ([`output.path-mode: abs`](https://golangci-lint.run/docs/configuration/file/)) precisely because users running it across several projects could not tell which project a finding came from.
+
+**`-tags` composes with it**, and both are worth running:
+
+```bash
+qtlint -multi-module ./...
+qtlint -multi-module -tags integration ./...
+```
+
+Two invocations, not one, and deliberately so. A build tag only ever *adds* files to a build, so satisfying `integration` pulls in the files behind `//go:build integration` and drops the ones behind `//go:build !integration`. Neither run is a superset of the other, and qtlint does not guess which sets of tags your repository means — an unsatisfied constraint is indistinguishable from a nonexistent one, so a tool inventing tag combinations would analyze builds you never ship. Naming the contours is yours; naming the modules is not.
+
+`-json` output is a single document however many modules ran, so anything parsing it does not need to know. Everything else the driver does is unchanged: `-fix`, `-diff`, `-c`, `-only-stable-fixes`, the opt-in rules, and the `-flags` inventory that `go vet -vettool` reads.
+
+Two limitations. The mode needs directory patterns — `./...`, `./x/...`, or a path beginning with `./`, `../` or `/` — and refuses import paths and words like `all`, because those name packages through the module graph and carry no directory to search. And `go vet -vettool=qtlint` does its own package loading, so it still reaches one module; run qtlint directly for the rest.
 
 ### `-only-stable-fixes` flag
 
