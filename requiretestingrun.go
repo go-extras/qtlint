@@ -343,11 +343,16 @@ func (p *runPlan) nameParams(pass *analysis.Pass) {
 // fixing one whose enclosing site was withheld would name a parameter that
 // rewrite has not introduced.
 func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
+	// The package's function declarations are indexed once for the whole plan.
+	// Building the index per escape would rebuild it for every subtest in
+	// every file, which is the same answer at a cost that grows with the
+	// package.
+	callees := newCalleeReach(pass)
 	for _, s := range p.sites {
 		if !p.writesResolvableNames(pass, s.run) {
 			continue
 		}
-		reach := closureCReach(pass, s.run)
+		reach := closureCReach(pass, s.run, callees)
 		withheld := reach.deferred || (onlyStableFixes && reach.testScoped)
 		if withheld {
 			s.withheldReason = reach.withholdReason(onlyStableFixes)
@@ -770,7 +775,7 @@ func (r cReach) withholdReason(onlyStableFixes bool) string {
 //
 // A selector is enough on its own: c.Cleanup taken as a method value and
 // called later reaches exactly as far as calling it outright.
-func closureCReach(pass *analysis.Pass, run qtCRun) cReach {
+func closureCReach(pass *analysis.Pass, run qtCRun, callees *calleeReach) cReach {
 	if run.cObj == nil {
 		return cReach{}
 	}
@@ -799,6 +804,10 @@ func closureCReach(pass *analysis.Pass, run qtCRun) cReach {
 		}
 		if _, rhs, ok := soleAssign(parent); ok && rhs == ident {
 			// The assignment that hands the *qt.C on is already followed.
+			return
+		}
+		if inner, ok := followedCallReach(callees, parent, ident); ok {
+			reach.merge(inner)
 			return
 		}
 		// The *qt.C goes somewhere this rule cannot follow: into a helper, a
@@ -855,35 +864,7 @@ func calleeName(fun ast.Expr) string {
 // the assignment as an escape, which would be the stricter answer for the one
 // shape this exists to follow.
 func heldQtCObjects(pass *analysis.Pass, lit *ast.FuncLit, cObj types.Object) map[types.Object]bool {
-	held := map[types.Object]bool{cObj: true}
-	for changed := true; changed; {
-		changed = false
-		ast.Inspect(lit, func(n ast.Node) bool {
-			lhs, rhs, ok := soleAssign(n)
-			if !ok {
-				return true
-			}
-			src, ok := rhs.(*ast.Ident)
-			if !ok || !held[pass.TypesInfo.Uses[src]] {
-				return true
-			}
-			dst, ok := lhs.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			obj := pass.TypesInfo.Defs[dst]
-			if obj == nil {
-				obj = pass.TypesInfo.Uses[dst]
-			}
-			if obj == nil || held[obj] {
-				return true
-			}
-			held[obj] = true
-			changed = true
-			return true
-		})
-	}
-	return held
+	return heldQtCObjectsIn(pass, lit, cObj)
 }
 
 // soleAssign returns the two sides of a node that assigns one value to one

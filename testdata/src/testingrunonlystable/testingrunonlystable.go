@@ -100,9 +100,25 @@ func TestNestedUnstableOuter(t *testing.T) {
 	})
 }
 
-// escapeHelper takes the checker, so a closure that calls it hands its *qt.C
-// somewhere this rule cannot follow.
-func escapeHelper(c *qt.C) string { return c.TempDir() }
+// scopedHelper takes the checker and calls a test-scoped method on it. The
+// rule reads its body rather than guessing, so the closure that calls it is
+// withheld for what the helper actually does.
+func scopedHelper(c *qt.C) string { return c.TempDir() }
+
+// plainHelper takes the checker and only asserts through it. Reading its body
+// is what lets the closure that calls it keep its fix; before the callee was
+// followed, handing the checker to any helper at all withheld one.
+func plainHelper(c *qt.C) string {
+	c.Assert(1, qt.Equals, 1)
+	return "x"
+}
+
+// opaqueHolder gives the escape a shape the rule still cannot follow: a method
+// has a receiver, so the binding is not a plain parameter of a package-level
+// function and the body cannot be asked about it by name.
+type opaqueHolder struct{}
+
+func (opaqueHolder) take(c *qt.C) string { return c.TempDir() }
 
 // A withheld site says what withheld it. The clause names the construct the
 // *qt.C escaped into, because that is the one question the tool can answer and
@@ -111,8 +127,16 @@ func escapeHelper(c *qt.C) string { return c.TempDir() }
 func TestWithholdingNamesItsCause(t *testing.T) {
 	c := qt.New(t)
 
-	c.Run("escape", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the \\*qt.C is handed to escapeHelper\\(\\.\\.\\.\\), so what it can reach includes \\(\\*qt.C\\).Defer, which panics unless Done\\(\\) ran — give that function a \\*testing.T instead and this converts"
-		c.Assert(escapeHelper(c), qt.Not(qt.Equals), "")
+	c.Run("scoped helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure calls c.TempDir, which binds to whichever test the \\*qt.C came from"
+		c.Assert(scopedHelper(c), qt.Not(qt.Equals), "")
+	})
+
+	c.Run("opaque escape", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the \\*qt.C is handed to take\\(\\.\\.\\.\\), so what it can reach includes \\(\\*qt.C\\).Defer, which panics unless Done\\(\\) ran — give that function a \\*testing.T instead and this converts"
+		c.Assert(opaqueHolder{}.take(c), qt.Not(qt.Equals), "")
+	})
+
+	c.Run("plain helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
+		c.Assert(plainHelper(c), qt.Equals, "x")
 	})
 
 	c.Run("deferred", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure calls c.Defer, and a bare qt.New\\(t\\) supplies no Done\\(\\) the way C.Run does"
