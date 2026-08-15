@@ -63,6 +63,7 @@ func TestCheckLenNotEquals(t *testing.T) {
 	qt.Check(t, len(x), qt.Not(qt.Equals), 0) // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
 	c.Check(len(x), qt.Not(qt.Equals), 0)     // want "qtlint: use qt.Not\\(qt.HasLen\\) instead of len\\(x\\), qt.Not\\(qt.Equals\\)"
 }
+
 // Test case: len(x) with checkers other than qt.Equals or qt.Not(qt.Equals)
 func TestLenWithOtherCheckers(t *testing.T) {
 	c := qt.New(t)

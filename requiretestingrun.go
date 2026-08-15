@@ -649,6 +649,11 @@ type cReach struct {
 	// scope is the test rather than the assertion.
 	deferred   bool
 	testScoped bool
+	// handedOn is set when the reach was decided by a parameter's TYPE rather
+	// than by reading a body: the checker crossed into something that is not a
+	// *qt.C, so Defer is unreachable there and testing.TB's own methods are
+	// what remains.
+	handedOn bool
 
 	// escape names the first use the analysis could not follow, and method the
 	// first spelled-out method that decided the reach. Exactly one is usually
@@ -756,6 +761,10 @@ func (r cReach) withholdReason(onlyStableFixes bool) string {
 	case r.deferred:
 		return "; no fix: the closure calls c." + r.method +
 			", and a bare qt.New(t) supplies no Done() the way C.Run does"
+	case onlyStableFixes && r.testScoped && r.handedOn:
+		return "; no fix under -only-stable-fixes: the closure hands its *qt.C to a" +
+			" parameter that is not one, so what it can reach there is testing.TB's" +
+			" own methods, which bind to whichever test the *qt.C came from"
 	case onlyStableFixes && r.testScoped:
 		return "; no fix under -only-stable-fixes: the closure calls c." + r.method +
 			", which binds to whichever test the *qt.C came from"

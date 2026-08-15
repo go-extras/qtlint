@@ -62,6 +62,43 @@ func newCalleeReach(pass *analysis.Pass) *calleeReach {
 // returned for every shape whose binding is not a plain parameter of a
 // package-level function this pass can read.
 func (r *calleeReach) follow(call *ast.CallExpr, index int) (cReach, bool) {
+	// A parameter whose type cannot name the deferred methods answers the
+	// question by its type alone.
+	//
+	// Defer and Done are C's own. A callee that receives the checker as a
+	// testing.TB cannot name them, so the hazard is unreachable there whatever
+	// the body does, and the body does not have to be readable for that to
+	// hold. It closes the shapes no body-reading can: a function value in a
+	// struct field, a parameter of a callee from another package, a locally
+	// bound closure.
+	//
+	// The question is the parameter's method set, not its identity. An
+	// interface or type parameter that declares Defer itself is satisfied by a
+	// *qt.C and lets the body call the method by name whether or not the
+	// argument is one underneath, so asking "is this a *qt.C" would answer
+	// "safe" there and drop the one hazard this rule exists to keep -- silently,
+	// because a subtest whose deferred function stops running does not fail.
+	// Asking the method set also covers *Alias where the alias resolves to C,
+	// and makes a separate identity check unnecessary, because C names Defer
+	// itself.
+	//
+	// A single deferred method is enough to withhold. Requiring the parameter
+	// to name the whole API would let `interface{ Defer(func()) }` back through
+	// the shortcut, and one unrun deferred function is the whole hazard.
+	//
+	// What a parameter type bounds is what the callee can name THROUGH it. A
+	// callee that converts the value back to *qt.C names the concrete type
+	// itself, and no parameter type bounds that; the rule treats a conversion
+	// it cannot follow here as it does everywhere else.
+	//
+	// The test-scoped methods are answered the same way rather than assumed:
+	// Cleanup, TempDir and Setenv belong to testing.TB, so a TB-typed parameter
+	// reaches them and -only-stable-fixes must still say so, while a parameter
+	// that names none of them withholds nothing.
+	if param, ok := r.paramTypeAt(call, index); ok && !namesAnyMethod(param, deferredCMethods) {
+		return cReach{testScoped: namesAnyMethod(param, testScopedCMethods), handedOn: true}, true
+	}
+
 	ident, ok := stripParens(call.Fun).(*ast.Ident)
 	if !ok {
 		return cReach{}, false
@@ -99,6 +136,29 @@ func (r *calleeReach) follow(call *ast.CallExpr, index int) (cReach, bool) {
 	defer delete(r.visiting, obj)
 
 	return r.bodyReach(fn, paramObj)
+}
+
+// namesAnyMethod reports whether any of names is in t's method set, so a
+// parameter is asked what can be called through it rather than what it is.
+//
+// The check is by name only, matching how bodyReach itself decides a use is
+// deferredCMethods or testScopedCMethods: this rule has never matched a
+// method's signature, only its name.
+//
+// A nil pkg restricts the lookup to exported names, which is what every name
+// here is: these are quicktest's and testing.TB's own API.
+func namesAnyMethod(t types.Type, names map[string]bool) bool {
+	if t == nil {
+		return false
+	}
+	for name := range names {
+		if obj, _, _ := types.LookupFieldOrMethod(t, true, nil, name); obj != nil {
+			if _, isMethod := obj.(*types.Func); isMethod {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // paramFieldAt returns the identifier naming the parameter at position index,
@@ -184,6 +244,7 @@ func (r *calleeReach) bodyReach(fn *ast.FuncDecl, paramObj types.Object) (cReach
 func (r *cReach) merge(other cReach) {
 	r.deferred = r.deferred || other.deferred
 	r.testScoped = r.testScoped || other.testScoped
+	r.handedOn = r.handedOn || other.handedOn
 	if r.method == "" {
 		r.method = other.method
 	}
@@ -256,4 +317,34 @@ func followedCallReach(callees *calleeReach, parent ast.Node, ident *ast.Ident) 
 		return cReach{}, false
 	}
 	return callees.follow(call, index)
+}
+
+// paramTypeAt returns the declared type of the parameter the argument at index
+// binds to, and false when the callee has no signature or the position runs
+// into a variadic tail.
+func (r *calleeReach) paramTypeAt(call *ast.CallExpr, index int) (types.Type, bool) {
+	typ := r.pass.TypesInfo.TypeOf(call.Fun)
+	if typ == nil {
+		return nil, false
+	}
+	// Underlying rather than a direct assertion, because a defined function
+	// type -- the shape a struct field holding a helper usually has -- is a
+	// *types.Named that Unalias leaves alone, and the argument still binds to
+	// its underlying signature's parameter the same way. Rejecting it would
+	// leave every call through such a field unanswered for no reason. A
+	// *types.Signature is its own underlying type, so the one call covers both.
+	sig, ok := types.Unalias(typ).Underlying().(*types.Signature)
+	if !ok {
+		return nil, false
+	}
+	params := sig.Params()
+	if params == nil || index >= params.Len() {
+		return nil, false
+	}
+	if sig.Variadic() && index >= params.Len()-1 {
+		// Packed into a slice, so the parameter's declared type is not what the
+		// argument binds to.
+		return nil, false
+	}
+	return params.At(index).Type(), true
 }

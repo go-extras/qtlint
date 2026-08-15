@@ -20,8 +20,15 @@ import (
 )
 
 // C is a quicktest checker.
+//
+// testing.TB is embedded rather than held in a named field, because a rule that
+// answers by parameter type has to see what the real type is assignable to: the
+// real C embeds it, so a *qt.C is a testing.TB, and a stub that only carried one
+// would make every such fixture fail to compile for a reason the rule under test
+// has nothing to do with. The methods below still spell out what the embedding
+// provides, so the inventory stays visible; they shadow the promoted ones.
 type C struct {
-	TB testing.TB
+	testing.TB
 }
 
 // New returns a new checker instance.

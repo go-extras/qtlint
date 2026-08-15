@@ -135,6 +135,29 @@ func TestWithholdingNamesItsCause(t *testing.T) {
 		c.Assert(opaqueHolder{}.take(c), qt.Not(qt.Equals), "")
 	})
 
+	c.Run("handle helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure hands its \\*qt.C to a parameter that is not one, so what it can reach there is testing.TB's own methods, which bind to whichever test the \\*qt.C came from"
+		c.Assert(handleHelper(c), qt.Equals, "x")
+	})
+
+	c.Run("handle through a function value", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure hands its \\*qt.C to a parameter that is not one, so what it can reach there is testing.TB's own methods, which bind to whichever test the \\*qt.C came from"
+		holder := opaqueHandleHolder{take: handleHelper}
+		c.Assert(holder.take(c), qt.Equals, "x")
+	})
+
+	c.Run("handle through a named function type", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure hands its \\*qt.C to a parameter that is not one, so what it can reach there is testing.TB's own methods, which bind to whichever test the \\*qt.C came from"
+		holder := namedHandlerHolder{take: handleHelper}
+		c.Assert(holder.take(c), qt.Equals, "x")
+	})
+
+	c.Run("interface that declares Defer", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure calls c.Defer, and a bare qt.New\\(t\\) supplies no Done\\(\\) the way C.Run does"
+		c.Assert(deferringHelper(c), qt.Equals, "x")
+	})
+
+	c.Run("alias behind a function value", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the \\*qt.C is handed to holder.take\\(\\.\\.\\.\\), so what it can reach includes \\(\\*qt.C\\).Defer, which panics unless Done\\(\\) ran — give that function a \\*testing.T instead and this converts"
+		holder := opaqueAliasHolder{take: aliasDeferrer}
+		c.Assert(holder.take(c), qt.Equals, "x")
+	})
+
 	c.Run("plain helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		c.Assert(plainHelper(c), qt.Equals, "x")
 	})
@@ -155,4 +178,64 @@ func TestOnlyStableFixesNamesTheFlag(t *testing.T) {
 		c.Cleanup(func() {})
 		c.Assert(1, qt.Equals, 1)
 	})
+}
+
+// handleHelper takes the checker as a testing.TB, which is the case the type
+// answer exists for: Defer and Done are C's own, so nothing inside can name
+// them however the body is written, while Cleanup, TempDir and Setenv come
+// from TB itself and keep the fix withheld under -only-stable-fixes.
+func handleHelper(handle testing.TB) string { return "x" }
+
+// opaqueHandleHolder hands the checker to a function value, which no
+// body-reading can follow -- and does not need to, for the same reason.
+type opaqueHandleHolder struct {
+	take func(handle testing.TB) string
+}
+
+// deferrer declares Defer itself, so a *qt.C handed to it has Defer called on
+// it without the callee ever naming *qt.C.
+//
+// This is why the type answer asks the method set rather than the identity. A
+// rule asking "is this parameter a checker" answers no here, calls the hazard
+// unreachable, and rewrites a subtest whose deferred function then never runs
+// -- silently, because nothing fails.
+type deferrer interface {
+	Defer(f func())
+	Done()
+}
+
+func deferringHelper(d deferrer) string {
+	d.Defer(func() {})
+	return "x"
+}
+
+// cAlias spells C by another name, so *cAlias IS *qt.C. The method set answers
+// that correctly however the alias is written, where an identity check that
+// did not resolve it would not.
+type cAlias = qt.C
+
+// aliasTaker puts the alias behind a function value, so the fixture turns on
+// the type answer alone: there is no body to fall back on.
+type aliasTaker func(c *cAlias) string
+
+type opaqueAliasHolder struct {
+	take aliasTaker
+}
+
+func aliasDeferrer(c *cAlias) string {
+	c.Defer(func() {})
+	return "x"
+}
+
+// Handler is a defined function type wrapping the same parameter shape
+// opaqueHandleHolder's plain func field already exercises. paramTypeAt has
+// to see through the name to its underlying signature to still answer by
+// parameter type when the field's type is not itself a function literal
+// type.
+type Handler func(handle testing.TB) string
+
+// namedHandlerHolder hands the checker to a function value held through a
+// defined function type rather than an unnamed one.
+type namedHandlerHolder struct {
+	take Handler
 }

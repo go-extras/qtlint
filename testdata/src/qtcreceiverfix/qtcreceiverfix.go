@@ -17,8 +17,8 @@ func TestExistingC(t *testing.T) {
 
 // Case 2: a *qt.C is created once, however many assertions need it.
 func TestNoC(t *testing.T) {
-	qt.Assert(t, 1, qt.Equals, 1)                        // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
-	qt.Check(t, 2, qt.Equals, 2)                         // want "qtlint: use c.Check\\(...\\) instead of qt.Check\\(t, ...\\)"
+	qt.Assert(t, 1, qt.Equals, 1)                       // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
+	qt.Check(t, 2, qt.Equals, 2)                        // want "qtlint: use c.Check\\(...\\) instead of qt.Check\\(t, ...\\)"
 	qt.Assert(t, 3, qt.Equals, 3, qt.Commentf("third")) // want "qtlint: use c.Assert\\(...\\) instead of qt.Assert\\(t, ...\\)"
 }
 

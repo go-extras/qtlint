@@ -169,6 +169,49 @@ func TestIndirectDeferWithheldByDefault(t *testing.T) {
 	})
 }
 
+// Deferrer is the shape of an interface *qt.C satisfies without being one:
+// its method set names Defer and Done, the same two methods (*qt.C)
+// declares. A parameter of this shape can still call them on whatever
+// *qt.C is handed to it, so the type-only shortcut that treats a non-*qt.C
+// parameter as safe must not fire for it.
+type Deferrer interface {
+	Defer(func())
+	Done()
+}
+
+// deferThroughInterface reaches Defer through an interface parameter rather
+// than a *qt.C one.
+func deferThroughInterface(d Deferrer) { d.Defer(func() {}) }
+
+// Defer reached through an interface parameter is withheld exactly as Defer
+// reached through a *qt.C parameter is: the parameter is not a *qt.C, but
+// its method set names the same hazard.
+func TestIndirectDeferThroughInterfaceWithheldByDefault(t *testing.T) {
+	c := qt.New(t)
+	c.Run("sub", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure calls c.Defer, and a bare qt.New\\(t\\) supplies no Done\\(\\) the way C.Run does"
+		deferThroughInterface(c)
+	})
+}
+
+// AliasedC is a type alias for qt.C rather than a new named type, so a
+// *AliasedC parameter and a *qt.C parameter name the same underlying type.
+// The pointer's element still has to be unaliased for isQuicktestCType to
+// see through the alias to (*qt.C).
+type AliasedC = qt.C
+
+// deferThroughAliasedC reaches Defer through a pointer to the type alias
+// rather than through *qt.C spelled directly.
+func deferThroughAliasedC(c *AliasedC) { c.Defer(func() {}) }
+
+// Defer reached through the type alias is withheld exactly as Defer reached
+// through *qt.C spelled directly is: the two name the same type.
+func TestIndirectDeferThroughAliasWithheldByDefault(t *testing.T) {
+	c := qt.New(t)
+	c.Run("sub", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure calls c.Defer, and a bare qt.New\\(t\\) supplies no Done\\(\\) the way C.Run does"
+		deferThroughAliasedC(c)
+	})
+}
+
 // The *qt.C is followed through a var declaration as well as through :=, and
 // this is the case that pins which way round that matters. The alias only ever
 // has Assert called on it, so nothing is withheld and the site keeps its fix.
