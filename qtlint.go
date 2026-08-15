@@ -71,6 +71,14 @@ type analyzer struct {
 	// per-subtest qt.New rather than as c.Run. It is off by default: c.Run is
 	// a legitimate quicktest API and some projects prefer it.
 	requireTestingRun bool
+
+	// requireTestingHandle enables the opt-in house-style rule that requires
+	// a test helper to take testing.TB rather than *qt.C.
+	requireTestingHandle bool
+
+	// requireSubtestChecker enables the opt-in house-style rule that requires
+	// a subtest to assert through its own *qt.C.
+	requireSubtestChecker bool
 }
 
 // NewAnalyzer creates a new instance of the qtlint analyzer.
@@ -89,6 +97,10 @@ func NewAnalyzer() *analysis.Analyzer {
 	aa.Flags.BoolVar(&a.requireQtCReceiver, "require-qt-c-receiver", false,
 		"house-style rule, off by default: report qt.Assert(t, ...) and "+
 			"qt.Check(t, ...) and suggest the *qt.C method form")
+	aa.Flags.BoolVar(&a.requireSubtestChecker, "require-subtest-checker", false,
+		"report a subtest that asserts through the enclosing test's *qt.C (opt-in)")
+	aa.Flags.BoolVar(&a.requireTestingHandle, "require-testing-handle", false,
+		"report a test helper that takes a *qt.C and suggest testing.TB (opt-in)")
 	aa.Flags.BoolVar(&a.requireTestingRun, "require-testing-run", false,
 		"house-style rule, off by default: report c.Run(...) subtests and "+
 			"suggest t.Run(name, func(t *testing.T)) with a per-subtest qt.New")
@@ -184,6 +196,12 @@ func inSourceOrder(pass *analysis.Pass, rules func()) {
 // WithStack traversal. -require-testing-run needs a whole function at once
 // rather than one call at a time, so it walks the files itself.
 func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector) {
+	if a.requireTestingHandle {
+		a.checkRequireTestingHandle(pass)
+	}
+	if a.requireSubtestChecker {
+		a.checkRequireSubtestChecker(pass)
+	}
 	if a.requireTestingRun {
 		a.checkRequireTestingRun(pass)
 	}

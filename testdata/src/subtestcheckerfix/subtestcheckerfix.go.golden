@@ -1,0 +1,45 @@
+package subtestcheckerfix
+
+import (
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+)
+
+// The defect: the subtest asserts through the checker of the test around it,
+// so the failure names that test and an Assert stops it rather than the
+// subtest. It compiles and passes, which is why it needs a rule.
+func TestBorrows(t *testing.T) {
+	t.Run("sub", func(t *testing.T) { // want "qtlint: this subtest asserts through a \\*qt.C built from the test around it, so a failure names that test instead"
+		c := qt.New(t)
+		c.Assert(1, qt.Equals, 1)
+	})
+}
+
+// Conforming: the subtest builds its own.
+func TestOwn(t *testing.T) {
+	t.Run("sub", func(t *testing.T) {
+		c := qt.New(t)
+		c.Assert(1, qt.Equals, 1)
+	})
+}
+
+// Conforming control. Reading the enclosing test's handle is not a violation:
+// a subtest may legitimately want the parent's name. Only the checker decides
+// which test an assertion reports against.
+func TestReadsParentHandle(t *testing.T) {
+	t.Run("sub", func(t2 *testing.T) {
+		c := qt.New(t2)
+		c.Assert(t.Name(), qt.Not(qt.Equals), "")
+	})
+}
+
+// A blank handle leaves nothing to build a checker from, so the site is
+// reported without a fix rather than rewritten into something that does not
+// compile.
+func TestBlankHandle(t *testing.T) {
+	c := qt.New(t)
+	t.Run("sub", func(_ *testing.T) { // want "qtlint: this subtest asserts through a \\*qt.C built from the test around it, so a failure names that test instead; no fix: the closure's \\*testing.T is blank, so there is no handle to build a checker from"
+		c.Assert(1, qt.Equals, 1)
+	})
+}
