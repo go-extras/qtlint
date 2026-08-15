@@ -199,7 +199,7 @@ qtlint -multi-module ./...
 qtlint -multi-module -tags integration ./...
 ```
 
-Two invocations, not one, and deliberately so. A build tag only ever *adds* files to a build, so satisfying `integration` pulls in the files behind `//go:build integration` and drops the ones behind `//go:build !integration`. Neither run is a superset of the other, and qtlint does not guess which sets of tags your repository means — an unsatisfied constraint is indistinguishable from a nonexistent one, so a tool inventing tag combinations would analyze builds you never ship. Naming the contours is yours; naming the modules is not.
+Two invocations, not one, and deliberately so. A tag does not widen a build, it selects a different one: satisfying `integration` pulls in the files behind `//go:build integration` and at the same time drops those behind `//go:build !integration`. So neither run is a superset of the other, and running only the tagged one leaves the `!integration` files unlinted. qtlint does not guess which sets of tags your repository means — an unsatisfied constraint is indistinguishable from a nonexistent one, so a tool inventing tag combinations would analyze builds you never ship. Naming the contours is yours; naming the modules is not.
 
 `-json` output is a single document however many modules ran, so anything parsing it does not need to know. Everything else the driver does is unchanged: `-fix`, `-diff`, `-c`, `-only-stable-fixes`, the opt-in rules, and the `-flags` inventory that `go vet -vettool` reads.
 

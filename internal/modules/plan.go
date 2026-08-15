@@ -96,9 +96,12 @@ func Plan(wd string, operands []string) ([]Run, error) {
 func splitPattern(pattern string) request {
 	cleaned := filepath.ToSlash(pattern)
 
+	// A bare "..." never arrives here: isDirPattern refuses it, because the
+	// go command reads it as every package it can reach rather than every
+	// package below the working directory. "go list ..." in this repository
+	// prints archive/tar, bufio and the rest of the standard library. Quietly
+	// reading it as "./..." would narrow what the caller asked for.
 	switch {
-	case cleaned == "...":
-		return request{root: ".", recursive: true}
 	case strings.HasSuffix(cleaned, "/..."):
 		return request{root: strings.TrimSuffix(cleaned, "/..."), recursive: true}
 	default:

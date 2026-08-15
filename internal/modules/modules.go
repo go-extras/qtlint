@@ -54,10 +54,10 @@ const FlagName = "multi-module"
 //
 // Stripping FlagName from the child's arguments is what stops a child from
 // expanding again, and for a boolean flag that stripping is exact: the flag
-// package accepts only "-modules", "--modules" and the "=" spellings, all of
-// which Strip removes. The marker is here because the failure it guards
-// against is a fork bomb rather than a wrong answer, and that is worth a second
-// lock. It is not a user-facing setting.
+// package accepts only "-multi-module", "--multi-module" and the "="
+// spellings, all of which Requested removes. The marker is here because the
+// failure it guards against is a fork bomb rather than a wrong answer, and that
+// is worth a second lock. It is not a user-facing setting.
 const childEnv = "QTLINT_MODULES_CHILD"
 
 // valueFlags are the flags that take their value as a separate argument.
@@ -103,9 +103,9 @@ func ValueFlags() []string {
 // Requested reports whether args ask for multi-module mode, and returns args
 // with the flag removed so a child does not expand again.
 //
-// The value spellings of a boolean flag are honored, so "-modules=false" turns
-// the mode off exactly as the flag package would. A repeated flag takes the
-// last value, which is also what the flag package does.
+// The value spellings of a boolean flag are honored, so "-multi-module=false"
+// turns the mode off exactly as the flag package would. A repeated flag takes
+// the last value, which is also what the flag package does.
 func Requested(args []string) (rest []string, on bool) {
 	rest = make([]string, 0, len(args))
 

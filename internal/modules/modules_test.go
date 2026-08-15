@@ -7,8 +7,10 @@
 package modules_test
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -365,6 +367,43 @@ func TestPlanIsOrdered(t *testing.T) {
 
 	if !slices.IsSortedFunc(first, func(a, b modules.Run) int { return strings.Compare(a.Dir, b.Dir) }) {
 		t.Errorf("plan is not ordered: %v", first)
+	}
+}
+
+// TestExecuteNormalizesASignalledChild pins the exit code when a module run is
+// killed rather than finishing.
+//
+// A signal leaves no exit code, and ExitCode reports -1 for it. Returning that
+// reaches os.Exit, where a negative value becomes a status the caller's shell
+// reads as something else entirely — 255 on Unix — which is neither the
+// driver's 0, 1 nor 3. The module was not analyzed, so it counts as a failure.
+func TestExecuteNormalizesASignalledChild(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("the child is a POSIX shell that signals itself")
+	}
+
+	runs := []modules.Run{{Dir: t.TempDir(), Patterns: []string{"./..."}}}
+
+	code, err := modules.Execute(runs, modules.Options{
+		// A child that kills itself, standing in for one the operating
+		// system kills. Patterns are appended to Flags, and the shell
+		// ignores them.
+		Exe:    "/bin/sh",
+		Flags:  []string{"-c", "kill -9 $$"},
+		Stdout: io.Discard,
+		Stderr: io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if code < 0 {
+		t.Errorf("exit code = %d, which os.Exit cannot report faithfully", code)
+	}
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1: a module that was killed was not analyzed", code)
 	}
 }
 

@@ -32,6 +32,7 @@ type Options struct {
 // distinction rather than flattening every non-zero result into one.
 const (
 	exitClean       = 0
+	exitFailed      = 1
 	exitDiagnostics = 3
 )
 
@@ -123,6 +124,14 @@ func execute(run Run, opts Options) (code int, stdout []byte, err error) {
 	switch err := cmd.Run(); {
 	case errors.As(err, &exitErr):
 		code = exitErr.ExitCode()
+
+		// A signal leaves no exit code and ExitCode reports -1, which
+		// os.Exit would turn into a status the caller's shell reads as
+		// something else entirely. The module was not analyzed, so it is
+		// reported as the failure it is.
+		if code < 0 {
+			code = exitFailed
+		}
 	case err != nil:
 		return 0, nil, fmt.Errorf("run in %s: %w", run.Dir, err)
 	}
