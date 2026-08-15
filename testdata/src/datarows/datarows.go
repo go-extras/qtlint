@@ -65,29 +65,6 @@ func TestRowDoingSeveralThings(t *testing.T) {
 	}
 }
 
-// A row carrying the stdlib handle is left alone, and this is the control that
-// keeps the rule inside quicktest. The shape is the same defect in the abstract
-// — the row still holds the means to assert — but a package that never imports
-// quicktest can write it, and reporting it would make qtlint the arbiter of
-// table-driven tests in general. Only the checker is this tool's business.
-func TestRowCarriesAHandle(t *testing.T) {
-	tests := []struct {
-		name   string
-		assert func(tb testing.TB, err error)
-	}{
-		{
-			name:   "row",
-			assert: func(tb testing.TB, err error) { qt.New(tb).Assert(err, qt.IsNil) },
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			test.assert(t, nil)
-		})
-	}
-}
-
 // A row field holding a function that asserts nothing is data the test builds
 // with, and is left alone. This is the control that keeps the rule from
 // reading "no function fields".

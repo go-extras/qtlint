@@ -269,12 +269,10 @@ func bindingSite(lexParent *runSite, obj types.Object) *runSite {
 // nameParams gives every site the name its rewrite will write for the closure
 // parameter it introduces.
 //
-// The name is t. A closure becoming a subtest wants its handle called what
-// every other subtest in Go calls it, and it wants to shadow the enclosing
-// test's t rather than dodge it: the body is moving to the subtest, so a
-// t.TempDir() inside should name the subtest's directory and a t.Fatal inside
-// should fail the subtest. Renaming the parameter around the collision leaves
-// those calls addressing the parent, which compiles and passes and is wrong.
+// The name is t, and it shadows the enclosing test's t when the closure refers
+// to one. The body is moving to the subtest, so a t inside it should address
+// that subtest; renaming the parameter around the reference leaves those calls
+// addressing the parent, which compiles and passes and is wrong.
 //
 // Shadowing is settled by Go's scoping and needs no analysis of what else is
 // in the body. The one exception is not about the body at all — it is this
@@ -829,4 +827,3 @@ func newRunParam(run qtCRun, tName, testingName string) string {
 		return typeText
 	}
 }
-

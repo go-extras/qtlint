@@ -578,7 +578,7 @@ Note that this repository's own tests are written in the target form. Enabling t
 - `c := qt.New(t)` opens the closure — but only when the closure still needs a `*qt.C` after the rewrite. A closure whose sole use of it was the receiver of a nested `c.Run` loses that use, and a declaration with no uses does not compile;
 - the receiver's own `c := qt.New(t)` is removed when the rewrite takes its last use, for the same reason.
 
-The new parameter is named `t`, and it shadows the enclosing test's `t` when the closure refers to one. That is the point rather than a collision to dodge: the body is becoming a subtest, so a `t.TempDir()` inside it should name the subtest's directory and a `t.Fatal` inside it should fail the subtest. Naming the parameter around the reference — `t2` — compiles just as well and leaves those calls addressing the parent, which is how one temporary directory comes to be shared by every row of a table.
+The new parameter is named `t`, and it shadows the enclosing test's `t` when the closure refers to one. That is the point rather than a collision to dodge: the body is becoming a subtest, so a `t` inside it should address that subtest.
 
 **Nested subtests** are rewritten as one consistent set of edits. The inner call names the parameter the outer rewrite introduces, which is resolved before the inner one is planned; applying an outer rewrite on its own would otherwise leave an inner `c.Run` whose receiver no longer exists.
 
