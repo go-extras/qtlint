@@ -70,11 +70,11 @@ func TestNestedOuterAsserts(t *testing.T) {
 	})
 }
 
-// Nested subtests where the outer closure names the enclosing t, so the outer
-// rewrite has to take a different parameter name. The inner call must use
-// that name: using the enclosing t instead would still compile and would
-// attach the inner subtest to the parent test rather than to "outer".
-func TestNestedRenamedOuter(t *testing.T) {
+// Nested subtests where the outer closure names the enclosing t. The outer
+// rewrite takes that same name, so the reference becomes the outer subtest's
+// own handle, and the inner call written as t.Run attaches to "outer" because
+// that is what t means at that point.
+func TestNestedShadowedOuter(t *testing.T) {
 	c := qt.New(t)
 	c.Run("outer", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		t.Log("parent")
@@ -84,8 +84,9 @@ func TestNestedRenamedOuter(t *testing.T) {
 	})
 }
 
-// The closure already refers to the enclosing test's t, so the new parameter
-// takes a different name and that reference keeps meaning the parent.
+// The closure already refers to the enclosing test's t. The new parameter
+// takes that name anyway: the closure is becoming a subtest, and a t inside it
+// should address that subtest rather than the parent it was written against.
 func TestOuterTReferenced(t *testing.T) {
 	c := qt.New(t)
 	c.Run("sub", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"

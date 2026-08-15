@@ -65,12 +65,15 @@ func TestRowDoingSeveralThings(t *testing.T) {
 	}
 }
 
-// The handle rather than the checker is the same defect: what reaches the row
-// is still the means to assert.
+// A row carrying the stdlib handle is left alone, and this is the control that
+// keeps the rule inside quicktest. The shape is the same defect in the abstract
+// — the row still holds the means to assert — but a package that never imports
+// quicktest can write it, and reporting it would make qtlint the arbiter of
+// table-driven tests in general. Only the checker is this tool's business.
 func TestRowCarriesAHandle(t *testing.T) {
 	tests := []struct {
 		name   string
-		assert func(tb testing.TB, err error) // want "qtlint: a table row carries data, not a checker; give the row the value that varies, or split the table into the tests its rows are asserting differently"
+		assert func(tb testing.TB, err error)
 	}{
 		{
 			name:   "row",

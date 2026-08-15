@@ -269,11 +269,20 @@ func bindingSite(lexParent *runSite, obj types.Object) *runSite {
 // nameParams gives every site the name its rewrite will write for the closure
 // parameter it introduces.
 //
-// A new parameter is kept clear of every identifier already inside the closure
-// it belongs to, and that is enough on its own only while each site's receiver
-// is bound by the closure directly around it. A site whose receiver is bound
-// further out writes that receiver's name across the closures in between, and
-// those closures are taking parameters of their own from this same plan. Three
+// The name is t. A closure becoming a subtest wants its handle called what
+// every other subtest in Go calls it, and it wants to shadow the enclosing
+// test's t rather than dodge it: the body is moving to the subtest, so a
+// t.TempDir() inside should name the subtest's directory and a t.Fatal inside
+// should fail the subtest. Renaming the parameter around the collision leaves
+// those calls addressing the parent, which compiles and passes and is wrong.
+//
+// Shadowing is settled by Go's scoping and needs no analysis of what else is
+// in the body. The one exception is not about the body at all — it is this
+// rule's own rewrites colliding with each other.
+//
+// A site whose receiver is bound further out writes that receiver's name
+// across the closures in between, and those closures are taking parameters of
+// their own from this same plan. Three
 // levels of c.Run where the middle one renames its *qt.C leaves the innermost
 // site writing a "t" that the middle rewrite has just introduced, so the call
 // binds to the middle subtest instead of the outer one. Both spellings compile
@@ -308,7 +317,7 @@ func (p *runPlan) nameParams(pass *analysis.Pass) {
 	}
 
 	for _, s := range p.sites {
-		taken := takenNames(s.run.lit, p.qtAlias, p.testingName)
+		taken := map[string]bool{p.qtAlias: true, p.testingName: true}
 		for _, name := range s.keep {
 			taken[name] = true
 		}
@@ -821,12 +830,3 @@ func newRunParam(run qtCRun, tName, testingName string) string {
 	}
 }
 
-// takenNames returns every identifier appearing within lit, plus extra names
-// the rewrite writes and must therefore not shadow.
-func takenNames(lit *ast.FuncLit, extra ...string) map[string]bool {
-	names := identNamesIn(lit)
-	for _, name := range extra {
-		names[name] = true
-	}
-	return names
-}

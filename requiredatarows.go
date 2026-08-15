@@ -195,8 +195,14 @@ func reportDataRowField(pass *analysis.Pass, field *assertionField) {
 	})
 }
 
-// isTestHandleType reports whether typ is a way to assert: a *qt.C, a
-// *testing.T, or the testing.TB a checker is built from.
+// isTestHandleType reports whether typ is a *qt.C.
+//
+// Only the checker. This tool is about quicktest, and a row carrying a
+// *testing.T or a testing.TB is a table in a suite that may not use quicktest
+// at all — a package with no quicktest import anywhere would still have been
+// reported, which is a house rule about table-driven tests wearing qtlint's
+// name. The same shape reached through a checker is quicktest's business and
+// stays reported.
 //
 // The field's NAME is not consulted. A row carrying the means to assert is the
 // defect whatever it is called, and matching a name like "assert" would find
@@ -205,17 +211,7 @@ func isTestHandleType(typ types.Type) bool {
 	if typ == nil {
 		return false
 	}
-	if isQuicktestCType(typ) || isTestingTPtr(typ) {
-		return true
-	}
-	named, ok := types.Unalias(typ).(*types.Named)
-	if !ok {
-		return false
-	}
-	obj := named.Obj()
-	return obj != nil && obj.Pkg() != nil &&
-		obj.Pkg().Path() == testingPkgPath &&
-		(obj.Name() == "TB" || obj.Name() == "B" || obj.Name() == "F")
+	return isQuicktestCType(typ)
 }
 
 // collectFieldBody records elt when it assigns a closure to the field.
