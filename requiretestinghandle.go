@@ -15,10 +15,19 @@ import (
 // opens with; a withheld report appends why it was withheld.
 const qtCHelperMessage = "qtlint: a test helper takes the test handle, not the checker: use testing.TB and build the *qt.C inside"
 
-// qtCHelper describes a function declaration that takes a *qt.C parameter.
+// qtCHelper describes a function that takes a *qt.C parameter, whether it is
+// declared at package level or bound to a variable inside a test.
+//
+// Both shapes are the same defect and the same repair. A test that builds its
+// fixtures with a local closure taking the checker blocks -require-testing-run
+// exactly as a package-level helper does, and leaving the local one out would
+// mean the rule cleared a repository down to the shape it could not see.
 type qtCHelper struct {
-	// decl is the declaration and param the *qt.C parameter's field.
+	// body is the function's body and sig its signature. decl is set only for
+	// a package-level declaration; a local closure has none.
 	decl  *ast.FuncDecl
+	body  *ast.BlockStmt
+	sig   *ast.FuncType
 	param *ast.Field
 	// name is the parameter's name and obj the object it declares. A blank or
 	// unnamed parameter has neither.
@@ -46,33 +55,13 @@ type qtCHelper struct {
 // closure has been converted, and -require-testing-run can then do its half.
 // A *testing.T parameter would force both halves to land in one edit.
 func (*analyzer) checkRequireTestingHandle(pass *analysis.Pass) {
-	helpers := make(map[types.Object]qtCHelper)
-	for _, file := range pass.Files {
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-			helper, ok := matchQtCHelper(pass, fn)
-			if !ok {
-				continue
-			}
-			if obj := pass.TypesInfo.Defs[fn.Name]; obj != nil {
-				helpers[obj] = helper
-			}
-		}
-	}
+	helpers := collectQtCHelpers(pass)
 	if len(helpers) == 0 {
 		return
 	}
 
 	calls, unreachable := callSitesByCallee(pass, helpers)
 	for obj, helper := range helpers {
-		// A function named anywhere other than in a call of it is passed as a
-		// value, and its type is written down somewhere this rule does not
-		// edit: a struct field, a variable, a parameter. Rewriting the
-		// declaration alone would leave that type disagreeing with it, so the
-		// site is reported with no call list and therefore no fix.
 		if unreachable[obj] {
 			pass.Report(analysis.Diagnostic{
 				Pos:     helper.param.Pos(),
@@ -85,6 +74,63 @@ func (*analyzer) checkRequireTestingHandle(pass *analysis.Pass) {
 	}
 }
 
+// collectQtCHelpers finds every function in pass that takes a *qt.C, in both
+// shapes it occurs in: a package-level declaration and a closure bound to a
+// variable inside a test.
+func collectQtCHelpers(pass *analysis.Pass) map[types.Object]qtCHelper {
+	helpers := make(map[types.Object]qtCHelper)
+	for _, file := range pass.Files {
+		collectDeclaredHelpers(pass, file, helpers)
+		collectBoundHelpers(pass, file, helpers)
+	}
+	return helpers
+}
+
+// collectDeclaredHelpers gathers the package-level declarations.
+func collectDeclaredHelpers(pass *analysis.Pass, file *ast.File, into map[types.Object]qtCHelper) {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		helper, ok := matchQtCHelper(pass, fn)
+		if !ok {
+			continue
+		}
+		if obj := pass.TypesInfo.Defs[fn.Name]; obj != nil {
+			into[obj] = helper
+		}
+	}
+}
+
+// collectBoundHelpers gathers the closures bound to a variable.
+//
+// A closure bound to a name is the same defect wearing a local one:
+// fixture := func(c *qt.C) … blocks -require-testing-run exactly as a
+// package-level helper does, and leaving it out would mean the rule cleared a
+// repository down to the shape it could not see.
+func collectBoundHelpers(pass *analysis.Pass, file *ast.File, into map[types.Object]qtCHelper) {
+	ast.Inspect(file, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		lit, litOK := assign.Rhs[0].(*ast.FuncLit)
+		ident, identOK := assign.Lhs[0].(*ast.Ident)
+		if !litOK || !identOK {
+			return true
+		}
+		obj := pass.TypesInfo.Defs[ident]
+		if obj == nil {
+			return true
+		}
+		if helper, ok := matchQtCLiteral(pass, lit); ok {
+			into[obj] = helper
+		}
+		return true
+	})
+}
+
 // matchQtCHelper parses fn into a qtCHelper.
 //
 // A method is skipped: its receiver ties it to a type whose other methods this
@@ -93,12 +139,30 @@ func (*analyzer) checkRequireTestingHandle(pass *analysis.Pass) {
 // reason a named function argument to c.Run is: the call sites do not line up
 // one to one, so a rewrite would have to guess.
 func matchQtCHelper(pass *analysis.Pass, fn *ast.FuncDecl) (qtCHelper, bool) {
-	if fn.Recv != nil || fn.Type.Params == nil || fn.Body == nil {
+	if fn.Recv != nil {
+		return qtCHelper{}, false
+	}
+	helper, ok := matchQtCSignature(pass, fn.Type, fn.Body)
+	if !ok {
+		return qtCHelper{}, false
+	}
+	helper.decl = fn
+	return helper, true
+}
+
+// matchQtCLiteral parses a function literal bound to a variable.
+func matchQtCLiteral(pass *analysis.Pass, lit *ast.FuncLit) (qtCHelper, bool) {
+	return matchQtCSignature(pass, lit.Type, lit.Body)
+}
+
+// matchQtCSignature finds the sole *qt.C parameter in a signature.
+func matchQtCSignature(pass *analysis.Pass, sig *ast.FuncType, body *ast.BlockStmt) (qtCHelper, bool) {
+	if sig.Params == nil || body == nil {
 		return qtCHelper{}, false
 	}
 
 	index := 0
-	for _, field := range fn.Type.Params.List {
+	for _, field := range sig.Params.List {
 		width := len(field.Names)
 		if width == 0 {
 			width = 1
@@ -117,7 +181,7 @@ func matchQtCHelper(pass *analysis.Pass, fn *ast.FuncDecl) (qtCHelper, bool) {
 		if width != 1 {
 			return qtCHelper{}, false
 		}
-		helper := qtCHelper{decl: fn, param: field, index: index}
+		helper := qtCHelper{body: body, sig: sig, param: field, index: index}
 		if len(field.Names) == 1 && field.Names[0].Name != "_" {
 			helper.name = field.Names[0].Name
 			helper.obj = pass.TypesInfo.Defs[field.Names[0]]
@@ -209,7 +273,7 @@ func reportQtCHelper(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExp
 // qtCHelperEdits renders the declaration change, the qt.New the body needs,
 // and one edit per call site.
 func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr) ([]analysis.TextEdit, string) {
-	file := fileHolding(pass, helper.decl.Pos())
+	file := fileHolding(pass, helper.param.Pos())
 	if file == nil {
 		return nil, "; no fix: this rule could not find the file the declaration is in"
 	}
@@ -226,7 +290,7 @@ func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr
 	if !packageQualifies(pass, testingName, testingPkgPath, helper.param.Pos()) {
 		return nil, "; no fix: the testing qualifier does not mean testing where the new parameter type would go"
 	}
-	if !packageQualifies(pass, qtAlias, quicktestPkgPath, helper.decl.Body.Lbrace) {
+	if !packageQualifies(pass, qtAlias, quicktestPkgPath, helper.body.Lbrace) {
 		return nil, "; no fix: the quicktest qualifier does not mean quicktest where the qt.New would go"
 	}
 
@@ -267,7 +331,7 @@ func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr
 	// The handle takes a name of its own rather than reusing the checker's, so
 	// the qt.New the body gains can still be spelled c := qt.New(tb) and every
 	// existing use of c in the body keeps meaning the checker.
-	tbName := freeName("tb", takenNamesInFunc(helper.decl))
+	tbName := freeName("tb", takenNamesInFunc(helper.sig, helper.body))
 	edits := []analysis.TextEdit{{
 		Pos:     helper.param.Pos(),
 		End:     helper.param.End(),
@@ -277,8 +341,8 @@ func qtCHelperEdits(pass *analysis.Pass, helper qtCHelper, calls []*ast.CallExpr
 	// A parameter the body never reads needs no checker built for it, and
 	// building one anyway declares a variable nothing uses. An unused
 	// parameter is legal; an unused local is not.
-	if usesObject(pass, helper.decl.Body, helper.obj) {
-		edits = append(edits, prependStmtEdit(pass, helper.decl.Body,
+	if usesObject(pass, helper.body, helper.obj) {
+		edits = append(edits, prependStmtEdit(pass, helper.body,
 			fmt.Sprintf("%s := %s.New(%s)", helper.name, qtAlias, tbName)))
 	}
 
@@ -336,13 +400,15 @@ func exprText(pass *analysis.Pass, expr ast.Expr) string {
 
 // takenNamesInFunc returns every name declared or used anywhere in fn, so a
 // name chosen clear of it cannot shadow one the body relies on.
-func takenNamesInFunc(fn *ast.FuncDecl) map[string]bool {
+func takenNamesInFunc(nodes ...ast.Node) map[string]bool {
 	taken := make(map[string]bool)
-	ast.Inspect(fn, func(n ast.Node) bool {
-		if ident, ok := n.(*ast.Ident); ok {
-			taken[ident.Name] = true
-		}
-		return true
-	})
+	for _, node := range nodes {
+		ast.Inspect(node, func(n ast.Node) bool {
+			if ident, ok := n.(*ast.Ident); ok {
+				taken[ident.Name] = true
+			}
+			return true
+		})
+	}
 	return taken
 }
