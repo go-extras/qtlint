@@ -170,7 +170,7 @@ func TestMatchesVetTool(t *testing.T) {
 	t.Parallel()
 
 	standalone := runQtlint(t, nil, "-tags", "qtprobe", "./...")
-	vet := runCommand(t, nil, "go", "vet", "-tags", "qtprobe", "-vettool="+qtlintBin, "./...")
+	vet := runCommand(t, fixturePath(t, fixtureDir), nil, "go", "vet", "-tags", "qtprobe", "-vettool="+qtlintBin, "./...")
 
 	if !slices.Equal(standalone.files, vet.files) {
 		t.Errorf("standalone and vettool disagree\nstandalone: %q\nvettool:    %q", standalone.files, vet.files)
@@ -206,20 +206,23 @@ type result struct {
 	files []string
 	// code is the process exit code.
 	code int
-	// output is stdout and stderr, for failure messages.
+	// output is standard output followed by standard error, for
+	// failure messages.
 	output string
+	// stdout is standard output alone. The driver prints diagnostics to
+	// standard error and its JSON documents to standard output, so a test
+	// about -json or -flags has to read this rather than the mixture.
+	stdout string
 }
 
 func runQtlint(t *testing.T, env []string, args ...string) result {
 	t.Helper()
 
-	return runCommand(t, env, qtlintBin, args...)
+	return runCommand(t, fixturePath(t, fixtureDir), env, qtlintBin, args...)
 }
 
-func runCommand(t *testing.T, env []string, name string, args ...string) result {
+func runCommand(t *testing.T, dir string, env []string, name string, args ...string) result {
 	t.Helper()
-
-	dir := fixturePath(t)
 
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
@@ -230,22 +233,33 @@ func runCommand(t *testing.T, env []string, name string, args ...string) result 
 	cmd.Env = append(os.Environ(), "GOFLAGS=", "GOWORK=off")
 	cmd.Env = append(cmd.Env, env...)
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	// The two streams are captured separately rather than into one buffer.
+	// os/exec serializes writes only when Stdout and Stderr are the same
+	// comparable value; anything else, a wrapper included, gets a goroutine
+	// each and they would race on the shared buffer.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	code := 0
 	err := cmd.Run()
+
+	output := stdout.String() + stderr.String()
 
 	var exitErr *exec.ExitError
 	switch {
 	case errors.As(err, &exitErr):
 		code = exitErr.ExitCode()
 	case err != nil:
-		t.Fatalf("run %s %q: %v\n%s", name, args, err, out.String())
+		t.Fatalf("run %s %q: %v\n%s", name, args, err, output)
 	}
 
-	return result{files: diagnosedFiles(dir, out.String()), code: code, output: out.String()}
+	return result{
+		files:  diagnosedFiles(dir, output),
+		code:   code,
+		output: output,
+		stdout: stdout.String(),
+	}
 }
 
 // diagnosedFiles extracts the fixture-relative file of every diagnostic in
@@ -280,13 +294,13 @@ func diagnosedFiles(dir, output string) []string {
 	return slices.Compact(files)
 }
 
-func fixturePath(t *testing.T) string {
+func fixturePath(t *testing.T, dir string) string {
 	t.Helper()
 
-	dir, err := filepath.Abs(fixtureDir)
+	abs, err := filepath.Abs(dir)
 	if err != nil {
-		t.Fatalf("locate %s: %v", fixtureDir, err)
+		t.Fatalf("locate %s: %v", dir, err)
 	}
 
-	return dir
+	return abs
 }

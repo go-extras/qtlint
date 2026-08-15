@@ -27,8 +27,35 @@ import (
 	"golang.org/x/tools/go/analysis/singlechecker"
 
 	"github.com/go-extras/qtlint"
+	"github.com/go-extras/qtlint/internal/modules"
 	"github.com/go-extras/qtlint/internal/tagsflag"
 )
+
+// executable returns the path to re-run for each module.
+//
+// The reliable spelling is os.Executable. Argument zero is whatever the caller
+// typed, and it need not resolve from another working directory, which is
+// exactly where each module run puts it. Falling back to it is still better
+// than refusing, because a relative argument zero only fails once the run
+// starts, and says so plainly when it does.
+func executable() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return os.Args[0]
+	}
+
+	return exe
+}
+
+// workingDir returns the directory package patterns are written relative to.
+func workingDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+
+	return wd
+}
 
 // Build information. Populated at build-time via ldflags.
 var (
@@ -48,6 +75,27 @@ func main() {
 
 	// Add custom version flag.
 	flag.Bool("version", false, "print version and exit")
+
+	// Registered so that -h describes it and the driver's own parse accepts
+	// it; the mode itself is decided below, before the driver ever parses.
+	flag.Bool(modules.FlagName, false, modules.Usage)
+
+	// A pattern naming a module other than the one holding the working
+	// directory is an error the go command reports, whatever the spelling, so
+	// covering several modules means running once per module with the working
+	// directory moved. That has to happen before the driver starts, because
+	// the driver parses the global flag set and exits without returning. See
+	// package modules.
+	if code, handled, err := modules.Dispatch(
+		executable(), workingDir(), os.Args[1:], os.Stdout, os.Stderr,
+	); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "qtlint: %v\n", err)
+			os.Exit(1)
+		}
+
+		os.Exit(code)
+	}
 
 	// The analysis driver accepts -tags but does nothing with it, and it never
 	// hands out the package-loading configuration where build tags would
