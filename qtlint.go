@@ -1212,8 +1212,9 @@ func isQuicktestCType(t types.Type) bool {
 	if t == nil {
 		return false
 	}
+	t = types.Unalias(t)
 	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
+		t = types.Unalias(ptr.Elem())
 	}
 
 	named, ok := t.(*types.Named)

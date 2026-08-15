@@ -144,6 +144,11 @@ func TestWithholdingNamesItsCause(t *testing.T) {
 		c.Assert(holder.take(c), qt.Equals, "x")
 	})
 
+	c.Run("handle through a named function type", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix under -only-stable-fixes: the closure hands its \\*qt.C to a parameter that is not one, so what it can reach there is testing.TB's own methods, which bind to whichever test the \\*qt.C came from"
+		holder := namedHandlerHolder{take: handleHelper}
+		c.Assert(holder.take(c), qt.Equals, "x")
+	})
+
 	c.Run("plain helper", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run"
 		c.Assert(plainHelper(c), qt.Equals, "x")
 	})
@@ -178,4 +183,17 @@ func handleHelper(handle any) string { return "x" }
 // body-reading can follow -- and does not need to, for the same reason.
 type opaqueHandleHolder struct {
 	take func(handle any) string
+}
+
+// Handler is a defined function type wrapping the same parameter shape
+// opaqueHandleHolder's plain func field already exercises. paramTypeAt has
+// to see through the name to its underlying signature to still answer by
+// parameter type when the field's type is not itself a function literal
+// type.
+type Handler func(handle any) string
+
+// namedHandlerHolder hands the checker to a function value held through a
+// defined function type rather than an unnamed one.
+type namedHandlerHolder struct {
+	take Handler
 }

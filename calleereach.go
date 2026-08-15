@@ -74,7 +74,13 @@ func (r *calleeReach) follow(call *ast.CallExpr, index int) (cReach, bool) {
 	// The test-scoped methods are a different matter and stay conservative:
 	// Cleanup, TempDir, Setenv and the rest belong to testing.TB itself, so a
 	// TB-typed parameter reaches them and -only-stable-fixes must still say so.
-	if param, ok := r.paramTypeAt(call, index); ok && !isQuicktestCType(param) {
+	//
+	// An interface or type parameter whose own method set names both Defer and
+	// Done is not covered by any of that: whatever satisfies it can still be a
+	// *qt.C, and the parameter's declared type lets the body call those methods
+	// by name whether or not the argument is a *qt.C underneath. That shape
+	// keeps the blunt answer instead of the type-only one.
+	if param, ok := r.paramTypeAt(call, index); ok && !isQuicktestCType(param) && !hasDeferAndDoneMethodSet(param) {
 		return cReach{testScoped: true, handedOn: true}, true
 	}
 
@@ -115,6 +121,32 @@ func (r *calleeReach) follow(call *ast.CallExpr, index int) (cReach, bool) {
 	defer delete(r.visiting, obj)
 
 	return r.bodyReach(fn, paramObj)
+}
+
+// hasDeferAndDoneMethodSet reports whether t's method set names both Defer
+// and Done, the shape of an interface or type parameter that (*qt.C)
+// satisfies without being one. A parameter of this shape can still call
+// (*qt.C).Defer on whatever *qt.C is handed to it, so it must not take the
+// type-only shortcut that treats a non-*qt.C parameter as safe.
+//
+// The check is by name only, matching how bodyReach itself decides a use is
+// deferredCMethods or testScopedCMethods: this rule has never matched a
+// method's signature, only its name.
+func hasDeferAndDoneMethodSet(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	set := types.NewMethodSet(t)
+	var hasDefer, hasDone bool
+	for i := 0; i < set.Len(); i++ {
+		switch set.At(i).Obj().Name() {
+		case "Defer":
+			hasDefer = true
+		case "Done":
+			hasDone = true
+		}
+	}
+	return hasDefer && hasDone
 }
 
 // paramFieldAt returns the identifier naming the parameter at position index,
@@ -283,7 +315,15 @@ func (r *calleeReach) paramTypeAt(call *ast.CallExpr, index int) (types.Type, bo
 	if typ == nil {
 		return nil, false
 	}
-	sig, ok := types.Unalias(typ).(*types.Signature)
+	unaliased := types.Unalias(typ)
+	sig, ok := unaliased.(*types.Signature)
+	if !ok {
+		// A defined function type -- e.g. a named type used for a struct
+		// field or variable -- is not itself a *types.Signature, but its
+		// underlying type is, and the argument still binds to that
+		// signature's parameter the same way.
+		sig, ok = unaliased.Underlying().(*types.Signature)
+	}
 	if !ok {
 		return nil, false
 	}
