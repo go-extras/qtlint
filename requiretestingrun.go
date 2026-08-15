@@ -168,6 +168,13 @@ type runSite struct {
 	// carries edits. A site that is not reported is never fixed.
 	reported bool
 	fixed    bool
+
+	// withheldReason is the clause the diagnostic appends when the site is
+	// reported without a fix, naming what withheld it. A reported site with no
+	// fix and no reason would leave the reader to work out which of a
+	// closure's indirections the rule could not see through, which is the one
+	// question the tool is in a position to answer.
+	withheldReason string
 }
 
 // runPlan holds the -require-testing-run decisions for every c.Run site
@@ -329,10 +336,16 @@ func (p *runPlan) resolve(pass *analysis.Pass, onlyStableFixes bool) {
 		}
 		reach := closureCReach(pass, s.run)
 		withheld := reach.deferred || (onlyStableFixes && reach.testScoped)
+		if withheld {
+			s.withheldReason = reach.withholdReason(onlyStableFixes)
+		}
 		if s.outer != nil {
 			s.recvText = s.outer.tName
 			s.reported = s.outer.reported
 			s.fixed = s.outer.fixed && !withheld
+			if !s.fixed && s.withheldReason == "" {
+				s.withheldReason = s.outer.withheldReason
+			}
 			continue
 		}
 		name, ok := targetFromQtNew(pass, p.origins, s.run)
@@ -417,7 +430,7 @@ func (p *runPlan) report(pass *analysis.Pass) {
 		diag := analysis.Diagnostic{
 			Pos:     s.call.Fun.Pos(),
 			End:     s.call.Fun.End(),
-			Message: "qtlint: use t.Run with a per-subtest qt.New instead of c.Run",
+			Message: "qtlint: use t.Run with a per-subtest qt.New instead of c.Run" + s.withheldReason,
 		}
 		if edits, ok := p.edits(pass, s); s.fixed && ok {
 			diag.SuggestedFixes = []analysis.SuggestedFix{{
@@ -540,6 +553,35 @@ type cReach struct {
 	// scope is the test rather than the assertion.
 	deferred   bool
 	testScoped bool
+
+	// escape names the first use the analysis could not follow, and method the
+	// first spelled-out method that decided the reach. Exactly one is usually
+	// set, and both may be empty when nothing withholds the fix.
+	//
+	// They exist so a withheld fix can say what withheld it. Without them the
+	// diagnostic reads the same whether the fix was applied or not, and a
+	// reader has to work out which of a closure's several indirections was the
+	// one the rule could not see through.
+	escape string
+	method string
+}
+
+// withholdReason renders why a fix was withheld, as a clause a diagnostic can
+// append to its message. It returns the empty string when nothing withholds.
+func (r cReach) withholdReason(onlyStableFixes bool) string {
+	switch {
+	case r.escape != "":
+		return "; no fix: the *qt.C is handed to " + r.escape +
+			", so what it can reach includes (*qt.C).Defer, which panics unless Done() ran" +
+			" — give that function a *testing.T instead and this converts"
+	case r.deferred:
+		return "; no fix: the closure calls c." + r.method +
+			", and a bare qt.New(t) supplies no Done() the way C.Run does"
+	case onlyStableFixes && r.testScoped:
+		return "; no fix under -only-stable-fixes: the closure calls c." + r.method +
+			", which binds to whichever test the *qt.C came from"
+	}
+	return ""
 }
 
 // closureCReach works out what run's closure can do to its own *qt.C.
@@ -570,8 +612,14 @@ func closureCReach(pass *analysis.Pass, run qtCRun) cReach {
 			switch {
 			case deferredCMethods[sel.Sel.Name]:
 				reach.deferred = true
+				if reach.method == "" {
+					reach.method = sel.Sel.Name
+				}
 			case testScopedCMethods[sel.Sel.Name]:
 				reach.testScoped = true
+				if reach.method == "" {
+					reach.method = sel.Sel.Name
+				}
 			}
 			return
 		}
@@ -584,8 +632,45 @@ func closureCReach(pass *analysis.Pass, run qtCRun) cReach {
 		// withholding a fix that was not needed costs only a fix.
 		reach.deferred = true
 		reach.testScoped = true
+		if reach.escape == "" {
+			reach.escape = escapeDescription(parent)
+		}
 	})
 	return reach
+}
+
+// escapeDescription names the construct a *qt.C escaped into, in the words a
+// reader would use for it. The name is what makes a withheld fix actionable:
+// "handed to helper(...)" points at the function whose signature to change,
+// where "cannot fix" points at nothing.
+func escapeDescription(parent ast.Node) string {
+	switch p := parent.(type) {
+	case *ast.CallExpr:
+		if name := calleeName(p.Fun); name != "" {
+			return name + "(...)"
+		}
+		return "a function call"
+	case *ast.KeyValueExpr, *ast.CompositeLit:
+		return "a composite literal"
+	case *ast.ReturnStmt:
+		return "the function's result"
+	}
+	return "an expression this rule cannot follow"
+}
+
+// calleeName renders the called function's name for an escape description,
+// including the receiver or package qualifier when there is one.
+func calleeName(fun ast.Expr) string {
+	switch f := stripParens(fun).(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		if x, ok := stripParens(f.X).(*ast.Ident); ok {
+			return x.Name + "." + f.Sel.Name
+		}
+		return f.Sel.Name
+	}
+	return ""
 }
 
 // heldQtCObjects returns cObj together with every variable inside lit that a

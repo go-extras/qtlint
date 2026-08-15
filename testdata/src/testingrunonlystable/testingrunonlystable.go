@@ -99,3 +99,24 @@ func TestNestedUnstableOuter(t *testing.T) {
 		})
 	})
 }
+
+// escapeHelper takes the checker, so a closure that calls it hands its *qt.C
+// somewhere this rule cannot follow.
+func escapeHelper(c *qt.C) string { return c.TempDir() }
+
+// A withheld site says what withheld it. The clause names the construct the
+// *qt.C escaped into, because that is the one question the tool can answer and
+// the reader cannot: which of a closure's indirections was the opaque one, and
+// therefore whose signature to change.
+func TestWithholdingNamesItsCause(t *testing.T) {
+	c := qt.New(t)
+
+	c.Run("escape", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the \\*qt.C is handed to escapeHelper\\(\\.\\.\\.\\), so what it can reach includes \\(\\*qt.C\\).Defer, which panics unless Done\\(\\) ran — give that function a \\*testing.T instead and this converts"
+		c.Assert(escapeHelper(c), qt.Not(qt.Equals), "")
+	})
+
+	c.Run("deferred", func(c *qt.C) { // want "qtlint: use t.Run with a per-subtest qt.New instead of c.Run; no fix: the closure calls c.Defer, and a bare qt.New\\(t\\) supplies no Done\\(\\) the way C.Run does"
+		c.Defer(func() {})
+		c.Done()
+	})
+}
