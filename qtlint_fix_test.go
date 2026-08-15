@@ -94,4 +94,13 @@ func TestFixes(t *testing.T) {
 		setFlag(t, analyzer, "only-stable-fixes")
 		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "testingrunonlystable")
 	})
+
+	// A subtest asserting through the checker of the test around it. Neither
+	// other rule sees the shape: there is no c.Run to rewrite and the
+	// assertion already goes through a receiver.
+	t.Run("subtestchecker", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "require-subtest-checker")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "subtestcheckerfix")
+	})
 }
