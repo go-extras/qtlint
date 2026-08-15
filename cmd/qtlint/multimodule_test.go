@@ -20,6 +20,10 @@ import (
 // multimodDir is the multi-module fixture, relative to this package.
 const multimodDir = "testdata/multimod"
 
+// brokenmodDir is the fixture for exit-code precedence: an outer module with a
+// violation, and a module nested inside it that does not type-check.
+const brokenmodDir = "testdata/brokenmod"
+
 // The violations planted in the fixture, as fixture-relative paths.
 //
 // Each names the contour it belongs to. Two of them are the point of the
@@ -193,6 +197,42 @@ func TestFindingsInAnyModuleOutrankACleanOne(t *testing.T) {
 	}
 	if got.code != 3 {
 		t.Errorf("exit code = %d, want the driver's own 3 for diagnostics; output:\n%s", got.code, got.output)
+	}
+}
+
+// TestALoadFailureOutranksDiagnostics pins the other half of the exit code.
+//
+// A module the driver could not analyze is worse news than a module with
+// diagnostics: its packages were never inspected, and reporting that as a
+// finding would describe work that did not happen. The two controls are what
+// make the third line mean anything — without them a rule that always returned
+// 1, or one that returned whatever the last module gave, would satisfy it.
+func TestALoadFailureOutranksDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	dir := fixturePath(t, brokenmodDir)
+
+	good := runCommand(t, dir, nil, qtlintBin, "-multi-module", "./good/...")
+	if good.code != 3 {
+		t.Fatalf("the module with a violation exited %d, want 3; output:\n%s", good.code, good.output)
+	}
+
+	broken := runCommand(t, dir, nil, qtlintBin, "-multi-module", "./broken/...")
+	if broken.code != 1 {
+		t.Fatalf("the module that cannot load exited %d, want 1; output:\n%s", broken.code, broken.output)
+	}
+
+	both := runCommand(t, dir, nil, qtlintBin, "-multi-module", "./...")
+	if both.code != 1 {
+		t.Errorf("together they exited %d, want 1: a module that was never analyzed "+
+			"must not be reported as a mere finding; output:\n%s", both.code, both.output)
+	}
+
+	// The failing module must not have ended the run either. The caller asked
+	// about every module, and stopping early would hide the findings a later
+	// one was about to report.
+	if len(both.files) == 0 {
+		t.Errorf("no diagnostics reported, so the failing module stopped the run; output:\n%s", both.output)
 	}
 }
 
