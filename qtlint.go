@@ -23,6 +23,8 @@
 //   - if err != nil { t.Fatal[f](...) } which should be replaced with c.Assert(err, qt.IsNil, qt.Commentf(...))
 //   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
 //   - x, qt.Equals, nil which should be replaced with x, qt.IsNil
+//   - x, qt.Equals, true/false (or true/false, qt.Equals, x) which should be
+//     replaced with x, qt.IsTrue/qt.IsFalse
 //   - x, qt.Equals, y where x or y cannot be compared with ==, such as a
 //     slice or a map, which should be replaced with x, qt.DeepEquals, y
 //
@@ -263,6 +265,9 @@ func (a *analyzer) checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 
 	// Check for x, qt.Equals, nil pattern.
 	checkEqualsNilPattern(pass, call)
+
+	// Check for x, qt.Equals, true/false pattern, the literal on either side.
+	checkEqualsBoolPattern(pass, call)
 
 	// Check for x, qt.Equals, y where x or y cannot be compared with ==.
 	a.checkEqualsUncomparablePattern(pass, call)
