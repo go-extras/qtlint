@@ -1,0 +1,79 @@
+package equalsuncomparablefix
+
+import (
+	"errors"
+	"testing"
+	"time"
+
+	qt "github.com/frankban/quicktest"
+)
+
+type item struct {
+	Name string
+	Tags []string
+}
+
+type tree struct {
+	Name     string
+	Children []tree
+}
+
+type padded struct {
+	_     struct{ x int }
+	Names []string
+}
+
+type version struct{ major int }
+
+func (v *version) Equal(o *version) bool { return v.major == o.major }
+
+type hidden struct{ n int }
+
+type hook struct {
+	Name string
+	Run  func()
+}
+
+type holder struct {
+	Value any
+}
+
+// Stable: go-cmp compares every leaf, so qt.DeepEquals answers the question
+// qt.Equals could not.
+func TestStable(t *testing.T) {
+	c := qt.New(t)
+	now := time.Now()
+	var anyWant any = []int{1}
+
+	c.Assert([]int{1}, qt.DeepEquals, []int{1})                                // want `\[\]int is not comparable`
+	qt.Check(t, map[string]int{"a": 1}, qt.DeepEquals, map[string]int{"a": 1}) // want `map\[string\]int is not comparable`
+	c.Assert([]item{{Name: "a"}}, qt.DeepEquals, []item{{Name: "a"}})          // want `\[\]item is not comparable`
+	c.Assert(tree{Name: "a"}, qt.DeepEquals, tree{Name: "a"})                  // want `tree is not comparable`
+	c.Assert(padded{}, qt.DeepEquals, padded{})                                // want `padded is not comparable`
+	c.Assert([]time.Time{now}, qt.DeepEquals, []time.Time{now})                // want `\[\]time\.Time is not comparable`
+	c.Assert([]*version{{1}}, qt.DeepEquals, []*version{{1}})                  // want `\[\]\*version is not comparable`
+	c.Assert(map[hidden]int{{1}: 1}, qt.DeepEquals, map[hidden]int{{1}: 1})    // want `map\[hidden\]int is not comparable`
+	c.Assert([]int{1}, qt.DeepEquals, anyWant)                                 // want `\[\]int is not comparable`
+	c.Assert([]int{1}, qt.DeepEquals, []int{1}, qt.Commentf("with a comment")) // want `\[\]int is not comparable`
+}
+
+// Best-effort: go-cmp may still fail on equal values, through an unexported
+// field, a func, or whatever an interface holds.
+func TestBestEffort(t *testing.T) {
+	c := qt.New(t)
+	err := errors.New("boom")
+
+	c.Assert([]hidden{{1}}, qt.DeepEquals, []hidden{{1}})             // want `\[\]hidden is not comparable`
+	c.Assert([]version{{1}}, qt.DeepEquals, []version{{1}})           // want `\[\]version is not comparable`
+	c.Assert([]error{err}, qt.DeepEquals, []error{err})               // want `\[\]error is not comparable`
+	c.Assert([]hook{{Name: "a"}}, qt.DeepEquals, []hook{{Name: "a"}}) // want `\[\]hook is not comparable`
+	c.Assert([]holder{{1}}, qt.DeepEquals, []holder{{1}})             // want `\[\]holder is not comparable`
+}
+
+// Report-only: there is no checker that compares two non-nil funcs.
+func TestFunc(t *testing.T) {
+	c := qt.New(t)
+	f := func() {}
+
+	c.Assert(f, qt.Equals, f) // want `qt\.Equals always fails on func type func\(\)`
+}

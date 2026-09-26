@@ -1,0 +1,14 @@
+package equalsuncomparableonlystable
+
+import (
+	"testing"
+
+	quick "github.com/frankban/quicktest"
+)
+
+// The fix renames the checker only, so whatever the import is called stays.
+func TestAlias(t *testing.T) {
+	c := quick.New(t)
+
+	c.Assert([]int{1}, quick.DeepEquals, []int{1}) // want `\[\]int is not comparable`
+}
