@@ -96,7 +96,9 @@ func TestErrorsIsWithOtherCheckers(t *testing.T) {
 	c := qt.New(t)
 	err := makeErr()
 
-	qt.Assert(t, errors.Is(err, ErrSentinel), qt.Equals, true)
+	// qt.Equals, true is the qt.IsTrue rule's; once that fix is applied, this
+	// rule reports the result.
+	qt.Assert(t, errors.Is(err, ErrSentinel), qt.Equals, true) // want "qtlint: use qt.IsTrue instead of qt.Equals, true"
 	c.Assert(errors.Is(err, ErrSentinel), qt.DeepEquals, true)
 }
 

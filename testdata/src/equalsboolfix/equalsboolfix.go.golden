@@ -1,0 +1,41 @@
+package equalsboolfix
+
+import (
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+)
+
+type flag bool
+
+func TestFix(t *testing.T) {
+	c := qt.New(t)
+	b := true
+	m := map[string]any{"enabled": true}
+	f := flag(true)
+
+	c.Assert(b, qt.IsTrue)                         // want `qt\.IsTrue instead of qt\.Equals, true`
+	qt.Check(t, b, qt.IsFalse)                     // want `qt\.IsFalse instead of qt\.Equals, false`
+	c.Assert(b, qt.IsTrue)                         // want `x, qt\.IsTrue instead of true, qt\.Equals, x`
+	qt.Assert(t, b, qt.IsFalse)                    // want `x, qt\.IsFalse instead of false, qt\.Equals, x`
+	c.Assert(m["enabled"], qt.IsTrue)              // want `qt\.IsTrue instead of qt\.Equals, true`
+	c.Assert(f, qt.IsTrue)                         // want `flag is not bool`
+	c.Assert(b, qt.IsTrue, qt.Commentf("set"))     // want `qt\.IsTrue instead of qt\.Equals, true`
+	c.Assert(b, qt.IsTrue, qt.Commentf("set"))     // want `x, qt\.IsTrue instead of true, qt\.Equals, x`
+	c.Check(len(m) > 0, qt.IsTrue)                 // want `qt\.IsTrue instead of qt\.Equals, true`
+	c.Check(m["enabled"] == any(false), qt.IsTrue) // want `x, qt\.IsTrue instead of true, qt\.Equals, x`
+}
+
+// A call spread over several lines keeps its layout.
+func TestMultiline(t *testing.T) {
+	c := qt.New(t)
+	b := true
+
+	c.Assert(
+		b,
+		qt.IsTrue,
+	)
+	c.Assert(
+		b, qt.IsFalse,
+	)
+}

@@ -86,6 +86,11 @@ func TestAnalyzer(t *testing.T) {
 		analysistest.Run(t, testdata, analyzer, "equalsnil")
 	})
 
+	t.Run("qt.Equals with bool literal patterns", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "equalsbool")
+	})
+
 	t.Run("qt.Equals on uncomparable types", func(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		analysistest.Run(t, testdata, analyzer, "equalsuncomparable")

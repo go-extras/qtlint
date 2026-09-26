@@ -35,6 +35,8 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `if err != nil { t.Error[f](...) }` and suggesting `c.Check(err, qt.IsNil, qt.Commentf(...))`
 - Detecting `x, qt.Equals, nil` and suggesting `x, qt.IsNil`
 - Detecting `x, qt.Equals, y` where `x` or `y` cannot be compared with `==` (a slice or a map, for example) and suggesting `x, qt.DeepEquals, y`
+- Detecting `x, qt.Equals, true` or `true, qt.Equals, x` and suggesting `x, qt.IsTrue`
+- Detecting `x, qt.Equals, false` or `false, qt.Equals, x` and suggesting `x, qt.IsFalse`
 
 This ensures that tests use the most direct and readable checker available.
 
@@ -216,7 +218,7 @@ Pass `-only-stable-fixes` to withhold auto-fixes for those uncertain cases. The 
 
 ## Rules
 
-Rules 1 to 12 are on by default. Rules 13 and 14 are **house-style rules, off by default**, and each is named after the flag that turns it on.
+Rules 1 to 13 are on by default. Rules 14 and 15 are **house-style rules, off by default**, and each is named after the flag that turns it on.
 
 All rules support **automatic fixing** with the `-fix` flag. For rules 9 and 10 the rewrite is best-effort in some variants (multi-arg `t.Fatal`, non-literal format string, `if`-init statement, spread arguments); the unsafe-by-default variants are still emitted as fixes but can be skipped with `-only-stable-fixes`. Cases that cannot be rewritten at all (init-statement and spread args) remain report-only. Rule 12 works the same way: its fix is best-effort when go-cmp may not compare the type all the way down, and a func operand is report-only.
 
@@ -536,7 +538,38 @@ qtlint: use qt.DeepEquals instead of qt.Equals: []string is not comparable, so q
 qtlint: qt.Equals always fails on func type func(); a func can only be checked with qt.IsNil or qt.IsNotNil
 ```
 
-### 13. Require assertions to go through a `*qt.C` receiver — `-require-qt-c-receiver`
+### 13. Use `qt.IsTrue` / `qt.IsFalse` instead of `qt.Equals, true` / `qt.Equals, false`
+
+quicktest has dedicated checkers for booleans. Comparing against the `true` or `false` literal with `qt.Equals` says the same thing less directly, and the literal may sit on either side.
+
+**Bad:**
+```go
+c.Assert(ok, qt.Equals, true)
+c.Assert(false, qt.Equals, cfg.Debug)
+qt.Assert(t, m["enabled"], qt.Equals, true)
+```
+
+**Good:**
+```go
+c.Assert(ok, qt.IsTrue)
+c.Assert(cfg.Debug, qt.IsFalse)
+qt.Assert(t, m["enabled"], qt.IsTrue)
+```
+
+Only the predeclared `true` and `false` count: a local variable that shadows either name is not reported. The other operand must be of bool kind, or an interface or type parameter that may hold a bool. For any other type both checkers fail, and `qt.IsTrue` would only turn the failure into a bad check.
+
+The rewrite never turns a passing assertion into a failing one. `qt.Equals` passes only when the value's dynamic type is exactly `bool`, while `qt.IsTrue` and `qt.IsFalse` accept any value of bool kind. That difference matters for a named bool type: `c.Assert(flag, qt.Equals, true)` with `type Flag bool` always fails, because the boxed `Flag` never equals the boxed `bool` literal. The message says so for that case.
+
+**Auto-fix:** ✅ Replaces `qt.Equals, true` with `qt.IsTrue` (and `false` with `qt.IsFalse`). When the literal comes first, it is dropped and the value moves into the `got` position. Trailing arguments such as `qt.Commentf(...)` are preserved. `-only-stable-fixes` withholds none of these fixes.
+
+**Error message:**
+```
+qtlint: use qt.IsTrue instead of qt.Equals, true
+qtlint: use x, qt.IsFalse instead of false, qt.Equals, x
+qtlint: use qt.IsTrue instead of qt.Equals, true: Flag is not bool, so qt.Equals always fails
+```
+
+### 14. Require assertions to go through a `*qt.C` receiver — `-require-qt-c-receiver`
 
 **House-style rule, off by default.** quicktest exposes both a package-level assertion taking a `testing.TB` and a method on `*qt.C`, and both are correct. Some projects require the second form everywhere, so that a test function has exactly one `*qt.C` and every assertion goes through it: the `*qt.C` is what carries `c.Cleanup`, `c.Setenv`, `c.TempDir`, `c.Patch`, `c.Defer` and `c.Parallel`, as well as any comment state the test attached to it, and a file that mixes both forms grows two ways of reaching the test's context. Pass `-require-qt-c-receiver` to enforce it; without the flag nothing below is reported.
 
@@ -572,7 +605,7 @@ qtlint: use c.Assert(...) instead of qt.Assert(t, ...)
 qtlint: use c.Check(...) instead of qt.Check(t, ...)
 ```
 
-### 14. Require `t.Run` with a per-subtest `qt.New` — `-require-testing-run`
+### 15. Require `t.Run` with a per-subtest `qt.New` — `-require-testing-run`
 
 **House-style rule, off by default.** `c.Run` is a legitimate quicktest API and some projects prefer it, so nothing below is reported unless you pass `-require-testing-run`.
 

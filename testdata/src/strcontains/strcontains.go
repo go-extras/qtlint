@@ -95,8 +95,9 @@ func TestStringsContainsWithOtherCheckers(t *testing.T) {
 	c := qt.New(t)
 	str := "hello world"
 
-	// These should not trigger the rule
-	qt.Assert(t, strings.Contains(str, "world"), qt.Equals, true)
+	// These should not trigger the rule. qt.Equals, true is the qt.IsTrue
+	// rule's; once that fix is applied, this rule reports the result.
+	qt.Assert(t, strings.Contains(str, "world"), qt.Equals, true) // want "qtlint: use qt.IsTrue instead of qt.Equals, true"
 	c.Assert(strings.Contains(str, "world"), qt.DeepEquals, true)
 }
 
