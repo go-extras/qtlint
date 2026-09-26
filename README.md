@@ -34,6 +34,7 @@ The tool helps enforce best practices for quicktest usage by detecting suboptima
 - Detecting `if err != nil { t.Fatal[f](...) }` and suggesting `c.Assert(err, qt.IsNil, qt.Commentf(...))`
 - Detecting `if err != nil { t.Error[f](...) }` and suggesting `c.Check(err, qt.IsNil, qt.Commentf(...))`
 - Detecting `x, qt.Equals, nil` and suggesting `x, qt.IsNil`
+- Detecting `x, qt.Equals, y` where `x` or `y` cannot be compared with `==` (a slice or a map, for example) and suggesting `x, qt.DeepEquals, y`
 
 This ensures that tests use the most direct and readable checker available.
 
@@ -209,15 +210,15 @@ Two limitations. The mode needs directory patterns — `./...`, `./x/...`, or a 
 
 ### `-only-stable-fixes` flag
 
-Some rewrites have a clear, semantically equivalent target (e.g. `qt.Not(qt.IsNil)` → `qt.IsNotNil`). Others are best-effort: rules 9 and 10 (`if err != nil { t.Fatal/Error[f](...) }`) sometimes synthesize a `qt.Commentf` from arguments that were originally joined by `Sprintln`, or pass through a format string that the linter cannot prove is a string literal. Such rewrites usually do the right thing but may change the failure-message text.
+Some rewrites have a clear, semantically equivalent target (e.g. `qt.Not(qt.IsNil)` → `qt.IsNotNil`). Others are best-effort: rules 9 and 10 (`if err != nil { t.Fatal/Error[f](...) }`) sometimes synthesize a `qt.Commentf` from arguments that were originally joined by `Sprintln`, or pass through a format string that the linter cannot prove is a string literal. Such rewrites usually do the right thing but may change the failure-message text. Rule 12 (`qt.Equals` on an uncomparable type) is best-effort when `qt.DeepEquals` may still fail on equal values: when the compared type reaches an unexported struct field, a func, or an interface.
 
 Pass `-only-stable-fixes` to withhold auto-fixes for those uncertain cases. The diagnostic still fires so you can review and apply the change by hand; only the auto-applicable fix is held back. All other rules continue to provide fixes as before.
 
 ## Rules
 
-Rules 1 to 11 are on by default. Rules 12 and 13 are **house-style rules, off by default**, and each is named after the flag that turns it on.
+Rules 1 to 12 are on by default. Rules 13 and 14 are **house-style rules, off by default**, and each is named after the flag that turns it on.
 
-All rules support **automatic fixing** with the `-fix` flag. For rules 9 and 10 the rewrite is best-effort in some variants (multi-arg `t.Fatal`, non-literal format string, `if`-init statement, spread arguments); the unsafe-by-default variants are still emitted as fixes but can be skipped with `-only-stable-fixes`. Cases that cannot be rewritten at all (init-statement and spread args) remain report-only.
+All rules support **automatic fixing** with the `-fix` flag. For rules 9 and 10 the rewrite is best-effort in some variants (multi-arg `t.Fatal`, non-literal format string, `if`-init statement, spread arguments); the unsafe-by-default variants are still emitted as fixes but can be skipped with `-only-stable-fixes`. Cases that cannot be rewritten at all (init-statement and spread args) remain report-only. Rule 12 works the same way: its fix is best-effort when go-cmp may not compare the type all the way down, and a func operand is report-only.
 
 ### 1. Use `qt.IsNotNil` instead of `qt.Not(qt.IsNil)`
 
@@ -507,7 +508,35 @@ qt.Assert(t, x, qt.IsNil)
 qtlint: use qt.IsNil instead of qt.Equals, nil
 ```
 
-### 12. Require assertions to go through a `*qt.C` receiver — `-require-qt-c-receiver`
+### 12. Use `qt.DeepEquals` instead of `qt.Equals` on uncomparable types
+
+The quicktest `Equals` checker compares `got` and `want` with `==`. Go cannot compare slices, maps or funcs with `==`, nor arrays and structs that hold one. For two such values of the same type `==` panics, and `Equals` turns the panic into a failure (`comparing uncomparable type []int`). Values of two different types are simply unequal. So the assertion fails every time, whatever the values are.
+
+**Bad:**
+```go
+c.Assert(got, qt.Equals, []string{"a", "b"})
+qt.Assert(t, cfg, qt.Equals, Config{Names: []string{"a"}})
+```
+
+**Good:**
+```go
+c.Assert(got, qt.DeepEquals, []string{"a", "b"})
+qt.Assert(t, cfg, qt.DeepEquals, Config{Names: []string{"a"}})
+```
+
+The rule looks at the static types of `got` and `want`. An operand of interface type or of a type parameter does not trigger it, because what it holds is only known at run time. `x, qt.Equals, nil` is left to rule 11.
+
+**Auto-fix:** ✅ Replaces `qt.Equals` with `qt.DeepEquals`. `qt.DeepEquals` runs go-cmp, which still fails on equal values in three cases: it cannot read an unexported struct field (a bad check that suggests `cmp.AllowUnexported` or `cmpopts.IgnoreUnexported`), it treats two funcs as equal only when both are nil, and an interface may hold either. A type with an `Equal` method is compared by that method, so `[]time.Time` is fine. When the type reaches any of the three cases, the fix is best-effort and `-only-stable-fixes` withholds it.
+
+When `got` or `want` is itself a func, no fix is offered: no checker compares two non-nil funcs, and the only meaningful check is `qt.IsNil` or `qt.IsNotNil`.
+
+**Error message:**
+```
+qtlint: use qt.DeepEquals instead of qt.Equals: []string is not comparable, so qt.Equals always fails
+qtlint: qt.Equals always fails on func type func(); a func can only be checked with qt.IsNil or qt.IsNotNil
+```
+
+### 13. Require assertions to go through a `*qt.C` receiver — `-require-qt-c-receiver`
 
 **House-style rule, off by default.** quicktest exposes both a package-level assertion taking a `testing.TB` and a method on `*qt.C`, and both are correct. Some projects require the second form everywhere, so that a test function has exactly one `*qt.C` and every assertion goes through it: the `*qt.C` is what carries `c.Cleanup`, `c.Setenv`, `c.TempDir`, `c.Patch`, `c.Defer` and `c.Parallel`, as well as any comment state the test attached to it, and a file that mixes both forms grows two ways of reaching the test's context. Pass `-require-qt-c-receiver` to enforce it; without the flag nothing below is reported.
 
@@ -543,7 +572,7 @@ qtlint: use c.Assert(...) instead of qt.Assert(t, ...)
 qtlint: use c.Check(...) instead of qt.Check(t, ...)
 ```
 
-### 13. Require `t.Run` with a per-subtest `qt.New` — `-require-testing-run`
+### 14. Require `t.Run` with a per-subtest `qt.New` — `-require-testing-run`
 
 **House-style rule, off by default.** `c.Run` is a legitimate quicktest API and some projects prefer it, so nothing below is reported unless you pass `-require-testing-run`.
 

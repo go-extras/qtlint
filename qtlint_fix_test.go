@@ -20,6 +20,21 @@ func TestFixes(t *testing.T) {
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "aliaserrorsfix")
 	analysistest.RunWithSuggestedFixes(t, testdata, qtlint.Analyzer, "equalsnilfix")
 
+	// Default behavior: every qt.Equals on an uncomparable type becomes
+	// qt.DeepEquals, including where go-cmp may still fail on equal values.
+	t.Run("equalsuncomparablefix default applies all", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "equalsuncomparablefix")
+	})
+
+	// With --only-stable-fixes: only operands go-cmp compares down to the
+	// leaves are rewritten; the rest keep their diagnostic and lose the fix.
+	t.Run("equalsuncomparable only-stable-fixes", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		setFlag(t, analyzer, "only-stable-fixes")
+		analysistest.RunWithSuggestedFixes(t, testdata, analyzer, "equalsuncomparableonlystable")
+	})
+
 	// Default behavior: stable AND unstable errnil-fatal fixes apply.
 	t.Run("errcheckfix default applies all", func(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()

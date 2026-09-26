@@ -86,6 +86,11 @@ func TestAnalyzer(t *testing.T) {
 		analysistest.Run(t, testdata, analyzer, "equalsnil")
 	})
 
+	t.Run("qt.Equals on uncomparable types", func(t *testing.T) {
+		analyzer := qtlint.NewAnalyzer()
+		analysistest.Run(t, testdata, analyzer, "equalsuncomparable")
+	})
+
 	t.Run("require-qt-c-receiver patterns", func(t *testing.T) {
 		analyzer := qtlint.NewAnalyzer()
 		setFlag(t, analyzer, "require-qt-c-receiver")

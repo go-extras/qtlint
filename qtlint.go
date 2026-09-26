@@ -23,6 +23,8 @@
 //   - if err != nil { t.Fatal[f](...) } which should be replaced with c.Assert(err, qt.IsNil, qt.Commentf(...))
 //   - if err != nil { t.Error[f](...) } which should be replaced with c.Check(err, qt.IsNil, qt.Commentf(...))
 //   - x, qt.Equals, nil which should be replaced with x, qt.IsNil
+//   - x, qt.Equals, y where x or y cannot be compared with ==, such as a
+//     slice or a map, which should be replaced with x, qt.DeepEquals, y
 //
 // It also carries house-style rules that are off unless their flag is set,
 // because both forms they choose between are correct quicktest:
@@ -135,7 +137,7 @@ func (a *analyzer) run(pass *analysis.Pass) (any, error) {
 		insp.Preorder(nodeFilter, func(n ast.Node) {
 			switch n := n.(type) {
 			case *ast.CallExpr:
-				checkQuicktestCall(pass, n)
+				a.checkQuicktestCall(pass, n)
 			case *ast.IfStmt:
 				a.checkErrNilFatalPattern(pass, n)
 			}
@@ -228,7 +230,7 @@ func (a *analyzer) runOptInRules(pass *analysis.Pass, insp *inspector.Inspector)
 
 // checkQuicktestCall checks if a call expression is a quicktest assertion
 // and validates the checker argument.
-func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
+func (a *analyzer) checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 	// Check if this is a call to Assert or Check
 	if !isQuicktestAssertion(pass, call) {
 		return
@@ -261,6 +263,9 @@ func checkQuicktestCall(pass *analysis.Pass, call *ast.CallExpr) {
 
 	// Check for x, qt.Equals, nil pattern.
 	checkEqualsNilPattern(pass, call)
+
+	// Check for x, qt.Equals, y where x or y cannot be compared with ==.
+	a.checkEqualsUncomparablePattern(pass, call)
 }
 
 // checkEqualsNilPattern checks if the pattern is x, qt.Equals, nil and suggests
